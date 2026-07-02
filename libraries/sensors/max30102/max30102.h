@@ -16,7 +16,8 @@ typedef enum {
     MAX30102_OK = 0,
     MAX30102_ERROR_I2C = -1,
     MAX30102_ERROR_NOT_FOUND = -2,
-    MAX30102_ERROR_INVALID_PARAM = -3
+    MAX30102_ERROR_INVALID_PARAM = -3,
+    MAX30102_ERROR_NO_DATA = -4
 } max30102_status_t;
 
 // Context structure for the sensor

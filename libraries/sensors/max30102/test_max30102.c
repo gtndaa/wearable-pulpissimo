@@ -111,6 +111,36 @@ void test_fifo_read() {
     printf("Read FIFO values -> Red: %u, IR: %u\n", red_val, ir_val);
 }
 
+void test_continuous_read() {
+    printf("\n--- Test: Continuous FIFO Reading ---\n");
+
+    uint32_t red_val = 0;
+    uint32_t ir_val  = 0;
+
+    while (1) {
+        max30102_status_t status =
+            max30102_read_fifo(&sensor, &red_val, &ir_val);
+
+        switch (status) {
+            case MAX30102_OK:
+                printf("RED : %lu\tIR : %lu\n",
+                       (unsigned long)red_val,
+                       (unsigned long)ir_val);
+                break;
+
+            case MAX30102_ERROR_NO_DATA:
+                // Belum ada sampel baru, tidak perlu print apa-apa
+                break;
+
+            default:
+                printf("Read Error (%d)\n", status);
+                break;
+        }
+
+        for (volatile int i = 0; i < 100000; i++);
+    }
+}
+
 int main() {
     printf("==========================================\n");
     printf("      MAX30102 UNIT TEST RUNNER           \n");
@@ -120,6 +150,7 @@ int main() {
     test_part_id();
     test_calibration();
     test_fifo_read();
+    test_continuous_read();
     
     printf("\n==========================================\n");
     printf("TEST RESULTS: %d PASS, %d FAIL\n", tests_passed, tests_failed);

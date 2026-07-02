@@ -201,8 +201,9 @@ max30102_status_t max30102_read_fifo(max30102_t *dev, uint32_t *red_data, uint32
     i2c_read_reg(dev, MAX30102_REG_FIFO_RD_PTR, &rd_ptr);
     
     // Check if new data is available
-    if (wr_ptr == rd_ptr) {
-        return MAX30102_OK; // No new data
+    if (wr_ptr == rd_ptr)
+    {
+        return MAX30102_ERROR_NO_DATA;
     }
     
     // Read 6 bytes of data (3 bytes Red, 3 bytes IR)
