@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include "pulp.h"
 #include "implem/tick.h"
-#include "lis3dhtr.h" 
-// #include "mpu6050.h"
+//#include "lis3dhtr.h" 
+#include "mpu6050.h"
 #include "step_counter.h"
 
 void pe_start(void) {}
@@ -13,21 +13,17 @@ int main(void)
     pos_tick_init();
     printf("Step Counter\n\r");
 
-    /* 
-    mpu6050_config_t cfg;
-    mpu6050_default_config(&cfg);
+    /* */
+    i2c_t *i2c = mpu6050_open();
+    if (i2c == NULL) return -1;
+    if (mpu6050_init(i2c) != MPU6050_OK) return -1;
+    /**/
 
-    gyro_status_t ret = mpu6050_init(&cfg);
-    if (ret != GYRO_OK) {
-        printf("[ERROR] mpu6050_init failed, code=%d\n\r", ret);
-        return -1;
-    }
-    printf("[OK] mpu6050_init succeeded\n\r");
-    */
-
+    /*
     i2c_t *i2c = lis3dhtr_open();
     if (i2c == NULL) return -1;
     if (lis3dhtr_init(i2c) != LIS3DHTR_OK) return -1;
+    */
 
 
     step_counter_t sc;
@@ -42,13 +38,18 @@ int main(void)
     while (1) {
         long now_ms = pos_tick_get_counter_ms();
 
-        /* ret = mpu6050_read_accel_mg(&accel);
-        if (ret != GYRO_OK) { */
+        int ret = mpu6050_read_accel(i2c, &accel);
+        if (ret != MPU6050_OK) {
+            printf("[ERROR] accel read failed, code=%d\n\r", ret);
+            continue;
+        }
+        /* 
         int ret = lis3dhtr_read_accel(i2c, &accel);
         if (ret != LIS3DHTR_OK) {
             printf("[ERROR] accel read failed, code=%d\n\r", ret);
             continue;
         }
+        */
 
         int stepped = step_counter_update(&sc, accel.x, accel.y, accel.z, now_ms);
 
@@ -69,6 +70,6 @@ int main(void)
         for (volatile int d = 0; d < 100000; d++);
     }
 
-    // mpu6050_deinit();
+    i2c_close(i2c);
     return 0;
 }
