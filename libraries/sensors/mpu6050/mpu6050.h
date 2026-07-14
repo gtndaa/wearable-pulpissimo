@@ -1,102 +1,152 @@
-//Driver library for the InvenSense MPU-6050 gyroscope sensor
-//on the ICDeC PULPissimo FPGA board via I2C interface.
-//Focuses on gyroscope + I2C functionality from the MPU-6000/MPU-6050 datasheet.
+/*
+ * Copyright (C) 2026 ICDeC
+ *
+ * Driver library minimal untuk InvenSense MPU-6050 6-Axis Gyroscope/Accel.
+ *
+ * Library ini adalah hasil reverse-engineering dari raw I2C test yang
+ * sudah TERBUKTI berhasil di board ICDeC PULPissimo (Nusacore FPGA).
+ * Hanya berisi register yang benar-benar dipakai -- bukan port lengkap
+ * dari seluruh peta register MPU-6050.
+ *
+ * CATATAN PENTING (temuan dari debugging):
+ *   1. PULPissimo TIDAK punya FPU hardware -- semua konversi ke deg/s
+ *      dilakukan dengan integer fixed-point (dps * 100), BUKAN float.
+ *   2. Perlu delay kecil antara fase "tulis alamat register" dan fase
+ *      "baca data" (repeated-start) -- tanpa ini, hasil baca selalu 0xFF.
+ *      Delay ini sudah dibangun ke dalam mpu6050_read_reg() internal.
+ *   3. Output data MPU-6050 BIG-ENDIAN (byte High duluan, baru Low).
+ *      (Kebalikan dari L3G4200D yang little-endian.)
+ *   4. MPU-6050 otomatis auto-increment saat baca berurutan -- TIDAK perlu
+ *      set bit 0x80 seperti L3G4200D.
+ *   5. Setelah power-on, MPU-6050 dalam SLEEP MODE. WAJIB tulis 0x00 ke
+ *      PWR_MGMT_1 untuk bangunkan device.
+ */
 
 #ifndef __MPU6050_H__
 #define __MPU6050_H__
 
-#include "gyro_common.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-//Register Addresses
+/* ============================================================================
+ * Status Codes
+ * ============================================================================ */
 
-//Configuration Registers
-#define MPU6050_REG_SMPLRT_DIV    0x19  //Sample Rate Divider
-#define MPU6050_REG_CONFIG        0x1A  //Configuration (DLPF, EXT_SYNC)
-#define MPU6050_REG_GYRO_CONFIG   0x1B  //Gyroscope Configuration
-#define MPU6050_REG_ACCEL_CONFIG  0x1C  //Accelerometer Configuration
+typedef enum {
+    MPU6050_OK          = 0,   /**< Operasi berhasil */
+    MPU6050_ERR_I2C     = -1,  /**< I2C gagal buka / komunikasi umum */
+    MPU6050_ERR_ID      = -2,  /**< WHO_AM_I tidak sesuai (bukan MPU-6050) */
+    MPU6050_ERR_CONFIG  = -3,  /**< Gagal konfigurasi register */
+    MPU6050_ERR_TIMEOUT = -4,  /**< Transaksi I2C timeout */
+    MPU6050_ERR_NULL    = -5   /**< Pointer argumen NULL */
+} mpu6050_status_t;
 
-//Interrupt Registers
-#define MPU6050_REG_INT_PIN_CFG   0x37  //Interrupt pin configuration
-#define MPU6050_REG_INT_ENABLE    0x38  //Interrupt enable
-#define MPU6050_REG_INT_STATUS    0x3A  //Interrupt status
+/* ============================================================================
+ * I2C Address
+ * ============================================================================ */
 
-//Data Output Registers
-#define MPU6050_REG_ACCEL_XOUT_H  0x3B  //Accelerometer X-axis high byte
-#define MPU6050_REG_TEMP_OUT_H    0x41  //Temperature high byte
-#define MPU6050_REG_GYRO_XOUT_H   0x43  //Gyro X-axis High Byte
-#define MPU6050_REG_GYRO_XOUT_L   0x44  //Gyro X-axis Low Byte
-#define MPU6050_REG_GYRO_YOUT_H   0x45  //Gyro Y-axis High Byte
-#define MPU6050_REG_GYRO_YOUT_L   0x46  //Gyro Y-axis Low Byte
-#define MPU6050_REG_GYRO_ZOUT_H   0x47  //Gyro Z-axis High Byte
-#define MPU6050_REG_GYRO_ZOUT_L   0x48  //Gyro Z-axis Low Byte
+#define MPU6050_I2C_ADDR_DEFAULT    0x69   /**< AD0 pin = HIGH (Vdd) */
+#define MPU6050_I2C_ADDR_ALT       0x68   /**< AD0 pin = LOW (GND) */
 
-//Power Management
-#define MPU6050_REG_PWR_MGMT_1    0x6B  //Power Management 1
-#define MPU6050_REG_PWR_MGMT_2    0x6C  //Power Management 2
+/* ============================================================================
+ * Register Map (HANYA yang dipakai library ini)
+ * ============================================================================ */
 
-//Device Identification
-#define MPU6050_REG_WHO_AM_I      0x75  //Who Am I Register
+#define MPU6050_REG_SMPLRT_DIV      0x19   /**< Sample Rate Divider */
+#define MPU6050_REG_CONFIG          0x1A   /**< Configuration (DLPF, EXT_SYNC) */
+#define MPU6050_REG_GYRO_CONFIG     0x1B   /**< Gyro full-scale range (FS_SEL) */
+#define MPU6050_REG_GYRO_XOUT_H     0x43   /**< Awal data gyro 16-bit x3 axis (6 byte berurutan) */
+#define MPU6050_REG_PWR_MGMT_1      0x6B   /**< Power Management 1 */
+#define MPU6050_REG_WHO_AM_I        0x75   /**< Device ID, read-only, default 0x68 */
 
-//Expected WHO_AM_I value
-#define MPU6050_WHO_AM_I_VALUE    0x68
+#define MPU6050_WHO_AM_I_VALUE      0x68   /**< Nilai WHO_AM_I yang benar */
 
-//Gyro Config - Full-Scale Range (FS_SEL) raw bit values
-//Note: Pre-shifted enum values (for direct register write) are in gyro_common.h
-#define MPU6050_GYRO_FS_250DPS    0x00  //±250 °/s  (FS_SEL = 0)
-#define MPU6050_GYRO_FS_500DPS    0x01  //±500 °/s  (FS_SEL = 1)
-#define MPU6050_GYRO_FS_1000DPS   0x02  //±1000 °/s (FS_SEL = 2)
-#define MPU6050_GYRO_FS_2000DPS   0x03  //±2000 °/s (FS_SEL = 3)
+/* ============================================================================
+ * PWR_MGMT_1 values siap pakai
+ * ============================================================================ */
 
-//Gyro Sensitivity Scaling Factors (LSB/°/s)
-#define MPU6050_GYRO_SENSITIVITY_250    131.0f  //LSB/°/s at ±250 dps
-#define MPU6050_GYRO_SENSITIVITY_500    65.5f   //LSB/°/s at ±500 dps
-#define MPU6050_GYRO_SENSITIVITY_1000   32.8f   //LSB/°/s at ±1000 dps
-#define MPU6050_GYRO_SENSITIVITY_2000   16.4f   //LSB/°/s at ±2000 dps
+#define MPU6050_PWR1_DEVICE_RESET   0x80   /**< Device reset (bit 7) */
+#define MPU6050_PWR1_SLEEP          0x40   /**< Sleep mode (bit 6) -- default ON setelah power-on */
+#define MPU6050_PWR1_WAKEUP         0x00   /**< Clear sleep + reset -> wake up */
 
-//DLPF Configuration (CONFIG register bits [2:0])
-#define MPU6050_DLPF_BW_256HZ     0x00  //Accel 260Hz, Gyro 256Hz, Fs=8kHz
-#define MPU6050_DLPF_BW_188HZ     0x01  //Accel 184Hz, Gyro 188Hz, Fs=1kHz
-#define MPU6050_DLPF_BW_98HZ      0x02  //Accel 94Hz,  Gyro 98Hz,  Fs=1kHz
-#define MPU6050_DLPF_BW_42HZ      0x03  //Accel 44Hz,  Gyro 42Hz,  Fs=1kHz
-#define MPU6050_DLPF_BW_20HZ      0x04  //Accel 21Hz,  Gyro 20Hz,  Fs=1kHz
-#define MPU6050_DLPF_BW_10HZ      0x05  //Accel 10Hz,  Gyro 10Hz,  Fs=1kHz
-#define MPU6050_DLPF_BW_5HZ       0x06  //Accel 5Hz,   Gyro 5Hz,   Fs=1kHz
+/* ============================================================================
+ * Full-Scale Range (GYRO_CONFIG register bits [4:3])
+ * ============================================================================ */
 
-//Clock Source Selection (PWR_MGMT_1 register bits [2:0])
-#define MPU6050_CLK_INTERNAL_8MHZ 0x00  //Internal 8MHz oscillator
-#define MPU6050_CLK_GYRO_X_REF    0x01  //PLL with X-axis gyro reference
-#define MPU6050_CLK_GYRO_Y_REF    0x02  //PLL with Y-axis gyro reference
-#define MPU6050_CLK_GYRO_Z_REF    0x03  //PLL with Z-axis gyro reference
+typedef enum {
+    MPU6050_RANGE_250DPS  = 0x00,  /**< +/-250 dps  (sensitivitas 131   LSB/°/s) */
+    MPU6050_RANGE_500DPS  = 0x08,  /**< +/-500 dps  (sensitivitas 65.5  LSB/°/s) */
+    MPU6050_RANGE_1000DPS = 0x10,  /**< +/-1000 dps (sensitivitas 32.8  LSB/°/s) */
+    MPU6050_RANGE_2000DPS = 0x18   /**< +/-2000 dps (sensitivitas 16.4  LSB/°/s) */
+} mpu6050_range_t;
 
-//PWR_MGMT_1 Bit Definitions
-#define MPU6050_PWR1_DEVICE_RESET 0x80  //Device reset (bit 7)
-#define MPU6050_PWR1_SLEEP        0x40  //Sleep mode (bit 6)
-#define MPU6050_PWR1_CYCLE        0x20  //Cycle mode (bit 5)
-#define MPU6050_PWR1_TEMP_DIS     0x08  //Disable temperature sensor (bit 3)
+/* ============================================================================
+ * Data Structures
+ * ============================================================================ */
 
-//Configuration Structure
+/** Data mentah gyro (16-bit signed, langsung dari register). */
 typedef struct {
-    uint8_t              i2c_addr;    //7-bit I2C slave address (0x68 or 0x69)
-    int                  i2c_id;      //I2C peripheral ID (usually 0)
-    unsigned int         i2c_freq;    //I2C clock frequency in Hz
-    mpu6050_gyro_range_t gyro_range;  //Gyroscope full-scale range selection
-    uint8_t              dlpf_cfg;    //Digital Low Pass Filter config (0-6)
-    uint8_t              smplrt_div;  //Sample rate divider (sample rate = gyro_rate / (1 + div))
+    int16_t x;
+    int16_t y;
+    int16_t z;
+} mpu6050_raw_t;
+
+/**
+ * Data gyro dalam deg/s, format FIXED-POINT (dikali 100).
+ * Contoh: x = 359 artinya 3.59 dps.
+ * Dipakai KARENA PULPissimo tidak punya FPU -- pakai integer supaya
+ * hasil selalu benar dan cepat.
+ */
+typedef struct {
+    int32_t x_x100;
+    int32_t y_x100;
+    int32_t z_x100;
+} mpu6050_dps_x100_t;
+
+/* ============================================================================
+ * Configuration Structure
+ * ============================================================================ */
+
+typedef struct {
+    uint8_t         i2c_addr;   /**< 7-bit I2C address (0x69 atau 0x68) */
+    int             i2c_id;     /**< I2C peripheral ID (biasanya 0) */
+    unsigned int    i2c_freq;   /**< Baudrate I2C (disarankan 100000 / 100kHz) */
+    mpu6050_range_t range;      /**< Full-scale range awal */
+    uint8_t         dlpf_cfg;   /**< Digital Low Pass Filter config (0-6) */
+    uint8_t         smplrt_div; /**< Sample rate divider */
 } mpu6050_config_t;
 
-//API Functions
+/* ============================================================================
+ * Public API
+ * ============================================================================ */
 
-gyro_status_t mpu6050_default_config(mpu6050_config_t *cfg);
-gyro_status_t mpu6050_init(const mpu6050_config_t *cfg);
-gyro_status_t mpu6050_who_am_i(uint8_t *id);
-gyro_status_t mpu6050_read_gyro_raw(gyro_raw_t *raw);
-gyro_status_t mpu6050_read_gyro_dps(gyro_dps_t *dps);
-gyro_status_t mpu6050_set_gyro_range(mpu6050_gyro_range_t range);
-gyro_status_t mpu6050_deinit(void);
+/** Isi cfg dengan nilai default yang sudah terbukti bekerja (addr=0x69, 100kHz, +/-250dps). */
+mpu6050_status_t mpu6050_default_config(mpu6050_config_t *cfg);
+
+/**
+ * Inisialisasi sensor: buka I2C, coba alamat default (0x69) lalu alamat
+ * alternatif (0x68) kalau gagal, verifikasi WHO_AM_I, wake from sleep,
+ * lalu konfigurasi GYRO_CONFIG (full-scale range), DLPF, dan SMPLRT_DIV.
+ */
+mpu6050_status_t mpu6050_init(mpu6050_config_t *cfg);
+
+/** Baca ulang WHO_AM_I (untuk verifikasi manual). */
+mpu6050_status_t mpu6050_who_am_i(uint8_t *id);
+
+/** Baca data gyro mentah (raw, 16-bit signed per axis). */
+mpu6050_status_t mpu6050_read_raw(mpu6050_raw_t *raw);
+
+/** Baca data gyro dan konversi ke deg/s (format fixed-point x100). */
+mpu6050_status_t mpu6050_read_dps_x100(mpu6050_dps_x100_t *dps);
+
+/** Ganti full-scale range saat runtime. */
+mpu6050_status_t mpu6050_set_range(mpu6050_range_t range);
+
+/** Sleep mode dan tutup I2C. */
+mpu6050_status_t mpu6050_deinit(void);
 
 #ifdef __cplusplus
 }
