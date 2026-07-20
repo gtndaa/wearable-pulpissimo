@@ -101,6 +101,19 @@ typedef struct {
     int32_t z_x100;
 } l3g4200d_dps_x100_t;
 
+/**
+ * Data gyro dalam deg/s, format FLOAT.
+ * Dipakai untuk menguji apakah FPU hardware tersedia di sintesis saat ini.
+ * PERINGATAN: Hanya gunakan ini jika core disintesis DENGAN ekstensi 'F'
+ * (FPU). Tanpa FPU hardware, operasi float akan menghasilkan illegal
+ * instruction atau nilai yang salah.
+ */
+typedef struct {
+    float x;
+    float y;
+    float z;
+} l3g4200d_dps_float_t;
+
 /* ============================================================================
  * Configuration Structure
  * ============================================================================ */
@@ -134,6 +147,9 @@ l3g4200d_status_t l3g4200d_read_raw(l3g4200d_raw_t *raw);
 
 /** Baca data gyro dan konversi ke deg/s (format fixed-point x100). */
 l3g4200d_status_t l3g4200d_read_dps_x100(l3g4200d_dps_x100_t *dps);
+
+/** Baca data gyro dan konversi ke deg/s (format FLOAT -- untuk uji FPU). */
+l3g4200d_status_t l3g4200d_read_dps_float(l3g4200d_dps_float_t *dps);
 
 /** Ganti full-scale range saat runtime. */
 l3g4200d_status_t l3g4200d_set_range(l3g4200d_range_t range);
