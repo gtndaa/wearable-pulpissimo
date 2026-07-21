@@ -28,7 +28,9 @@ libraries/sensors/DS1307/test_host
 libraries/sensors/DS1307/build.sh
 
 libraries/sensors/l3g4200d/test/build/
+libraries/sensors/l3g4200d/test/unit_test_l3g4200d
 libraries/sensors/mpu6050/test/build/
+libraries/sensors/mpu6050/test/unit_test_mpu6050
 
 libraries/sensor/max30102/test_soft
 libraries/sensor/max30102/setup_env.sh
