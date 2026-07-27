@@ -33,6 +33,9 @@ libraries/sensors/mpu6050/test/unit_test_mpu6050
 libraries/sensor/max30102/test_soft
 libraries/sensor/max30102/setup_env.sh
 libraries/sensor/max30102/build/
+libraries/sensors/max30102/filter/run_gdb.sh
+libraries/sensors/max30102/filter/run_openocd.sh
+libraries/sensors/max30102/filter/build.sh
 
 libraries/sensors/OLED/GUI/test/test_gui_input
 

@@ -144,7 +144,7 @@ int main(void) {
       OLED_Clear();
 
       UG_FontSelect(&FONT_8X8); // Jam label
-      UG_PutString(10, 10, "ICDEC Medicalll");
+      UG_PutString(10, 10, "ICDEC Medical");
 
       UG_FontSelect(&FONT_6X8);
       UG_PutString(28, 45, date_str);
