@@ -70,33 +70,42 @@ This module provides a lightweight GUI application layer for displaying a **Watc
 #include "gui_app/screens/watch_face.h"
 #include "DS1307/rtc.h"
 
-volatile uint32_t g_tick_ms = 0;
-
 int main(void) {
-    // 1. Init hardware
+    // 1. Init hardware (I2C, RTC, OLED)
+    i2c_t *rtc_handle;
+    rtc_init(&dev, &rtc_handle);
+    
+    // 2. BACA RTC SEKALI SAJA (Mazhab pos_tick)
+    rtc_time_t t;
+    rtc_get_time(rtc_handle, &t);
+    
+    // Switch I2C ke OLED
     OLED_Init();
 
-    // 2. Init GUI system
+    // 3. Init GUI system
     gui_manager_init();
+    watch_face_set_time(t.hours, t.minutes, t.seconds);
+    watch_face_set_date(t.day, t.date, t.month, 2000 + t.year);
 
-    // 3. Main loop
+    // 4. Main loop
+    uint32_t last_ui_update = pos_tick_get_counter_ms();
+    
     while (1) {
-        // Read RTC
-        rtc_time_t t;
-        rtc_get_time(i2c_handle, &t);
-        watch_face_set_time(t.hours, t.minutes, t.seconds);
-        watch_face_set_date(t.day, t.date, t.month, 2000 + t.year);
-
-        // Read touch sensor
-        int16_t tx, ty;
-        bool pressed = CST816S_ReadTouch(&tx, &ty);
-        gui_manager_process_touch(pressed, tx, ty);
-
-        // Render & flush
-        gui_manager_render();
-        OLED_Update();
-
-        g_tick_ms++;
+        uint32_t now = pos_tick_get_counter_ms();
+        
+        // Software Timekeeping (Tiap 1000ms jam bertambah sendiri)
+        if (now - last_ui_update >= 1000) {
+            last_ui_update += 1000;
+            
+            // Logika penambahan detik/menit/jam manual di sini...
+            // Kemudian update UI:
+            // watch_face_set_time(h, m, s);
+            
+            gui_manager_render();
+            OLED_Update();
+        }
+        
+        pos_delay_busy_ms(5);
     }
 }
 ```

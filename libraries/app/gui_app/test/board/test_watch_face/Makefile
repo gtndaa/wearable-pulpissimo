@@ -1,42 +1,38 @@
 # ============================================================================
-# Makefile for Board Test: Watch Face GUI on OLED (PULPissimo RISC-V)
-# Location: gui_app/test/board/
+# Makefile for Board Test: Watch Face on OLED with RTC (PULPissimo RISC-V)
+# Location: gui_app/test/board/test_watch_face/
+#
+# Template mengikuti Demo_ICDEC_Medical/Makefile
 #
 # Usage:
-#   source /path/to/pulp-runtime/configs/pulpissimo.sh
-#   make clean all run platform=fpga
+#   source build.sh  (or manual: source pulpissimo.sh && make clean all)
+#   make run platform=fpga
 # ============================================================================
 
 PULP_APP = watch_face_test
 
-# Paths relative to this Makefile
-OLED_DIR   = ../../../../../sensors/OLED
-GUI_DIR    = $(OLED_DIR)/GUI
-UGUI_DIR   = $(GUI_DIR)/ugui
-UI_DIR     = $(UGUI_DIR)/ui
-APP_DIR    = ../../..
+# Paths relative to this Makefile (inside test/board/test_watch_face/)
+SENSORS_DIR = ../../../../../sensors
+OLED_DIR    = $(SENSORS_DIR)/OLED
+RTC_DIR     = $(SENSORS_DIR)/DS1307
 
 PULP_APP_C_SRCS = \
-	main.c \
-	$(APP_DIR)/gui_manager.c \
-	$(APP_DIR)/screens/watch_face.c \
-	$(OLED_DIR)/oled.c \
-	$(OLED_DIR)/font/font5x7.c \
-	$(GUI_DIR)/gui_port.c \
-	$(GUI_DIR)/gesture.c \
-	$(UGUI_DIR)/ugui.c \
-	$(UI_DIR)/Fonts/font_6x10.c \
-	$(UI_DIR)/ugui_button.c \
-	$(UI_DIR)/ugui_checkbox.c \
-	$(UI_DIR)/ugui_image.c \
-	$(UI_DIR)/ugui_progress.c \
-	$(UI_DIR)/ugui_textbox.c
+    main.c \
+    $(RTC_DIR)/rtc.c \
+    $(OLED_DIR)/oled.c \
+    $(OLED_DIR)/GUI/ugui/ugui.c \
+    $(OLED_DIR)/GUI/ugui/ui/Fonts/font_8x8.c \
+    $(OLED_DIR)/GUI/ugui/ui/Fonts/font_12x16.c \
+    $(OLED_DIR)/GUI/ugui/ui/Fonts/font_6x8.c \
+    $(OLED_DIR)/GUI/gesture.c \
+    $(OLED_DIR)/GUI/gui_port.c
 
-PULP_CFLAGS = -Os -flto -g \
-	-I$(OLED_DIR) \
-	-I$(GUI_DIR) \
-	-I$(UGUI_DIR) \
-	-I$(UI_DIR) \
-	-I$(APP_DIR)
+PULP_CFLAGS = -O3 -g \
+    -I. \
+    -I$(RTC_DIR) \
+    -I$(OLED_DIR) \
+    -I$(OLED_DIR)/GUI \
+    -I$(OLED_DIR)/GUI/ugui \
+    -I$(OLED_DIR)/GUI/ugui/ui
 
 include $(PULPRT_HOME)/rules/pulp.mk
