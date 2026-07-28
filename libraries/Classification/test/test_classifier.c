@@ -71,17 +71,25 @@ static const char *activity_name(activity_t act)
  * Helper: isi window dengan data yang sama (untuk simulasi steady-state)
  * ============================================================================ */
 
-static activity_t feed_constant_window(int16_t ax, int16_t ay, int16_t az,
-                                       int16_t gx, int16_t gy, int16_t gz)
+/**
+ * Helper: feed beberapa window identik agar majority vote stabil.
+ * Perlu minimal CLF_HISTORY_SIZE window agar vote menghasilkan
+ * hasil yang konsisten (bukan terpengaruh riwayat sebelumnya).
+ */
+static activity_t feed_constant_windows(int16_t ax, int16_t ay, int16_t az,
+                                        int16_t gx, int16_t gy, int16_t gz,
+                                        int num_windows)
 {
     activity_t result = ACTIVITY_UNKNOWN;
 
     classifier_init();
-    for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
-        imu_sample_t s;
-        s.ax = ax; s.ay = ay; s.az = az;
-        s.gx = gx; s.gy = gy; s.gz = gz;
-        result = classifier_update(&s);
+    for (int w = 0; w < num_windows; w++) {
+        for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
+            imu_sample_t s;
+            s.ax = ax; s.ay = ay; s.az = az;
+            s.gx = gx; s.gy = gy; s.gz = gz;
+            result = classifier_update(&s);
+        }
     }
     return result;
 }
@@ -135,7 +143,8 @@ static void test_still_detection(void)
 {
     printf("\n--- Test: Data diam → STILL ---\n");
 
-    activity_t result = feed_constant_window(0, 0, 16384, 0, 0, 0);
+    activity_t result = feed_constant_windows(0, 0, 16384, 0, 0, 0,
+                                               CLF_HISTORY_SIZE);
 
     printf("  Hasil klasifikasi: %s (%d)\n", activity_name(result), result);
     TEST_ASSERT(result == ACTIVITY_STILL,
@@ -159,15 +168,21 @@ static void test_stand_detection(void)
     classifier_init();
     activity_t result = ACTIVITY_UNKNOWN;
 
-    for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
-        imu_sample_t s;
-        s.ax = 200;            /* sedikit noise accel */
-        s.ay = -150;
-        s.az = 16300;          /* dominan gravitasi di Z → tegak */
-        s.gx = (i % 2 == 0) ? 400 : -400;  /* sway ringan, beri ZCR */
-        s.gy = 300;
-        s.gz = -200;
-        result = classifier_update(&s);
+    /* Feed CLF_HISTORY_SIZE windows agar majority vote stabil */
+    for (int w = 0; w < CLF_HISTORY_SIZE; w++) {
+        for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
+            imu_sample_t s;
+            s.ax = 200;            /* sedikit noise accel */
+            s.ay = -150;
+            s.az = 16300;          /* dominan gravitasi di Z → tegak */
+            /* Gyro mean_abs harus > CLF_GYRO_MEAN_ABS_STILL_THRESHOLD (50000)
+             * per window. mean_abs = N × (|gx|+|gy|+|gz|)
+             * 32 × (800+600+400) = 57600 > 50000 ✓ */
+            s.gx = (i % 2 == 0) ? 800 : -800;
+            s.gy = 600;
+            s.gz = -400;
+            result = classifier_update(&s);
+        }
     }
 
     printf("  Hasil klasifikasi: %s (%d)\n", activity_name(result), result);
@@ -191,19 +206,23 @@ static void test_sit_detection(void)
     classifier_init();
     activity_t result = ACTIVITY_UNKNOWN;
 
-    for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
-        imu_sample_t s;
-        /* SMA per sampel harus < CLF_SMA_REST_THRESHOLD / N agar masuk rest.
-         * CLF_SMA_REST_THRESHOLD=600000, N=32 → max ~18750 per sampel.
-         * Tapi Z harus TIDAK dominan agar tilt_ratio rendah → SIT.
-         * Contoh: distribusi merata, total ~15000 per sampel. */
-        s.ax = 8000;           /* sensor miring — X besar relatif */
-        s.ay = 4000;           /* Y signifikan */
-        s.az = 3000;           /* Z kecil → bukan tegak → tilt rendah */
-        s.gx = (i % 2 == 0) ? 400 : -400;
-        s.gy = 300;
-        s.gz = -200;
-        result = classifier_update(&s);
+    /* Feed CLF_HISTORY_SIZE windows agar majority vote stabil */
+    for (int w = 0; w < CLF_HISTORY_SIZE; w++) {
+        for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
+            imu_sample_t s;
+            /* SMA per sampel harus < CLF_SMA_REST_THRESHOLD / N agar masuk rest.
+             * CLF_SMA_REST_THRESHOLD=612000, N=32 → max ~19125 per sampel.
+             * Tapi Z harus TIDAK dominan agar tilt_ratio rendah → SIT.
+             * Total ~15900 per sampel. */
+            s.ax = 8000;           /* sensor miring — X besar relatif */
+            s.ay = 4000;           /* Y signifikan */
+            s.az = 3000;           /* Z kecil → bukan tegak → tilt rendah */
+            /* Gyro mean_abs > 50000: 32 × (800+600+400) = 57600 ✓ */
+            s.gx = (i % 2 == 0) ? 800 : -800;
+            s.gy = 600;
+            s.gz = -400;
+            result = classifier_update(&s);
+        }
     }
 
     printf("  Hasil klasifikasi: %s (%d)\n", activity_name(result), result);
@@ -229,20 +248,31 @@ static void test_walk_detection(void)
     classifier_init();
     activity_t result = ACTIVITY_UNKNOWN;
 
-    for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
-        imu_sample_t s;
-        /* Pola akselerasi periodik (meniru langkah): naik-turun */
-        int16_t step_phase = (i % 8 < 4) ? 5000 : -3000;
-        s.ax = 2000 + step_phase;
-        s.ay = 1000;
-        s.az = 16000 + step_phase / 2;
+    /* Feed CLF_HISTORY_SIZE windows agar majority vote stabil */
+    for (int w = 0; w < CLF_HISTORY_SIZE; w++) {
+        for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
+            imu_sample_t s;
+            /* Pola akselerasi periodik (meniru langkah): naik-turun */
+            int16_t step_phase = (i % 8 < 4) ? 5000 : -3000;
+            s.ax = 2000 + step_phase;
+            s.ay = 1000;
+            s.az = 16000 + step_phase / 2;
 
-        /* Pola gyro periodik (meniru ayunan tangan) */
-        s.gx = (i % 4 < 2) ? 800 : -800;   /* berosilasi → ZCR tinggi */
-        s.gy = (i % 4 < 2) ? 600 : -600;
-        s.gz = (i % 4 < 2) ? 400 : -400;
+            /* Pola gyro periodik (meniru ayunan tangan)
+             * Energy harus antara WALK (150K) dan RUN (5M).
+             * Per sampel: (600>>4)² + (400>>4)² + (300>>4)²
+             *           = 37² + 25² + 18² = 1369+625+324 = 2318
+             * × 32 sampel = 74,176 ... terlalu rendah.
+             * Pakai gx=±1200, gy=±800, gz=±600:
+             * (1200>>4)² + (800>>4)² + (600>>4)²
+             * = 75² + 50² + 37² = 5625+2500+1369 = 9494
+             * × 32 = 303,808 → antara 150K dan 5M ✓ */
+            s.gx = (i % 4 < 2) ? 1200 : -1200;
+            s.gy = (i % 4 < 2) ? 800 : -800;
+            s.gz = (i % 4 < 2) ? 600 : -600;
 
-        result = classifier_update(&s);
+            result = classifier_update(&s);
+        }
     }
 
     printf("  Hasil klasifikasi: %s (%d)\n", activity_name(result), result);
@@ -266,20 +296,26 @@ static void test_run_detection(void)
     classifier_init();
     activity_t result = ACTIVITY_UNKNOWN;
 
-    for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
-        imu_sample_t s;
-        /* Akselerasi tinggi dan periodik */
-        int16_t step_phase = (i % 6 < 3) ? 10000 : -8000;
-        s.ax = 4000 + step_phase;
-        s.ay = 3000;
-        s.az = 16000 + step_phase / 2;
+    /* Feed CLF_HISTORY_SIZE windows agar majority vote stabil */
+    for (int w = 0; w < CLF_HISTORY_SIZE; w++) {
+        for (int i = 0; i < CLF_WINDOW_SIZE; i++) {
+            imu_sample_t s;
+            /* Akselerasi tinggi dan periodik */
+            int16_t step_phase = (i % 6 < 3) ? 10000 : -8000;
+            s.ax = 4000 + step_phase;
+            s.ay = 3000;
+            s.az = 16000 + step_phase / 2;
 
-        /* Gyro energy sangat tinggi, masih periodik */
-        s.gx = (i % 3 < 2) ? 4000 : -4000;  /* intensitas tinggi + ZCR */
-        s.gy = (i % 3 < 2) ? 3000 : -3000;
-        s.gz = (i % 3 < 2) ? 2000 : -2000;
+            /* Gyro energy harus > RUN threshold (5M).
+             * Per sampel: (8000>>4)² + (6000>>4)² + (4500>>4)²
+             *           = 500² + 375² + 281² = 250000+140625+78961 = 469586
+             * × 32 = 15,026,752 → > 5M ✓ */
+            s.gx = (i % 3 < 2) ? 8000 : -8000;
+            s.gy = (i % 3 < 2) ? 6000 : -6000;
+            s.gz = (i % 3 < 2) ? 4500 : -4500;
 
-        result = classifier_update(&s);
+            result = classifier_update(&s);
+        }
     }
 
     printf("  Hasil klasifikasi: %s (%d)\n", activity_name(result), result);
@@ -311,17 +347,21 @@ static void test_fall_detection(void)
             s.ax = 5000;
             s.ay = 5000;
             s.az = 20000;
-            s.gx = 3000;
-            s.gy = 3000;
-            s.gz = 3000;
+            /* Gyro tinggi di seluruh window agar total energy > 5M (fall threshold)
+             * Per sampel: (10000>>4)² + (8000>>4)² + (7000>>4)² = 625²+500²+437²
+             *           = 390625+250000+190969 = 831594
+             * × 32 = 26,611,008 → > 5M ✓ */
+            s.gx = 10000;
+            s.gy = 8000;
+            s.gz = 7000;
         } else {
             /* Fase impact: akselerasi SANGAT tinggi + rotasi cepat */
             s.ax = 25000;  /* >1.5g pada ±2g range → benturan keras */
             s.ay = 20000;
             s.az = 30000;
-            s.gx = 8000;  /* rotasi cepat */
-            s.gy = 7000;
-            s.gz = 6000;
+            s.gx = 12000; /* rotasi sangat cepat */
+            s.gy = 10000;
+            s.gz = 9000;
         }
 
         result = classifier_update(&s);
