@@ -2,6 +2,7 @@
 #define STEP_COUNTER_H
 
 #include <stdint.h>
+#include "rtc.h"
 
 // FOR TUNING
 // Threshold in mg²
@@ -29,5 +30,15 @@ void step_counter_init(step_counter_t *sc);
 int  step_counter_update(step_counter_t *sc, int32_t x_mg, int32_t y_mg, int32_t z_mg, long now_ms);
 void step_counter_reset(step_counter_t *sc);
 uint32_t step_counter_get(const step_counter_t *sc);
+
+typedef struct {
+    uint8_t last_date;
+    uint8_t last_month;
+    uint8_t last_year;
+    int     valid;
+} day_tracker_t;
+
+void day_tracker_init(day_tracker_t *dt);
+int day_tracker_check_rollover(day_tracker_t *dt, i2c_t *i2c_handle);
 
 #endif 

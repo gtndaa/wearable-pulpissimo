@@ -44,7 +44,7 @@ static void print_rtc_error(int err) {
 }
 
 void pe_start(void) {
-    main();
+    //main();
 }
 
 int main(void) {

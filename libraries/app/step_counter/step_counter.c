@@ -3,7 +3,7 @@
 static int32_t magnitude_sq(int32_t x, int32_t y, int32_t z)
 {
     // divide to prevent overflow int32
-    // max mg per axis ~16000mg (±16g range), 16000/16=1000, 1000²=1000000 — aman
+    // max mg per axis ~16000mg (±16g range), 16000/16=1000, 1000²=1000000
     int32_t xd = x / 16;
     int32_t yd = y / 16;
     int32_t zd = z / 16;
@@ -80,4 +80,40 @@ void step_counter_reset(step_counter_t *sc)
 uint32_t step_counter_get(const step_counter_t *sc)
 {
     return sc->step_count;
+}
+
+void day_tracker_init(day_tracker_t *dt)
+{
+    dt->last_date  = 0;
+    dt->last_month = 0;
+    dt->last_year  = 0;
+    dt->valid      = 0;
+}
+
+int day_tracker_check_rollover(day_tracker_t *dt, i2c_t *i2c_handle)
+{
+    if (dt == NULL || i2c_handle == NULL) return RTC_ERR_NULL_PTR;
+
+    rtc_time_t t;
+    int ret = rtc_get_time(i2c_handle, &t);
+    if (ret != RTC_OK) {
+        return ret; // failed reading time from RTC
+    }
+
+    if (!dt->valid) {
+        dt->last_date  = t.date;
+        dt->last_month = t.month;
+        dt->last_year  = t.year;
+        dt->valid      = 1;
+        return 0;
+    }
+
+    if (t.date != dt->last_date || t.month != dt->last_month || t.year != dt->last_year) {
+        dt->last_date  = t.date;
+        dt->last_month = t.month;
+        dt->last_year  = t.year;
+        return 1; // day changed
+    }
+
+    return 0;
 }

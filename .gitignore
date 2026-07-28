@@ -35,3 +35,18 @@ libraries/sensors/mpu6050/test/unit_test_mpu6050
 libraries/sensor/max30102/test_soft
 libraries/sensor/max30102/setup_env.sh
 libraries/sensor/max30102/build/
+
+libraries/sensors/OLED/GUI/test/test_gui_input
+
+# NTP Sync (PULPissimo)
+libraries/app/ntp_sync/build/
+libraries/app/ntp_sync/test_ntp
+# NTP Sync (STM32 PlatformIO)
+libraries/app/ntp_sync/test_stm32/.pio/
+libraries/app/ntp_sync/test_stm32/.vscode/
+
+# build Demo_ICDEC
+libraries/app/Demo_ICDEC_Medical/build.sh
+libraries/app/Demo_ICDEC_Medical/build/
+libraries/app/Demo_ICDEC_Medical/run_openocd.sh
+libraries/app/Demo_ICDEC_Medical/run_gdb.sh

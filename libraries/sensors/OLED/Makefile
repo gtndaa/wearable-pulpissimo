@@ -9,9 +9,18 @@ PULP_APP_C_SRCS = \
 	tests/test_text.c \
 	tests/test_circle.c \
 	font/font5x7.c \
-	oled.c
+	oled.c \
+	GUI/gui_port.c \
+	GUI/gesture.c \
+	GUI/ugui/ugui.c \
+	GUI/ugui/ui/ugui_button.c \
+	GUI/ugui/ui/ugui_checkbox.c \
+	GUI/ugui/ui/ugui_image.c \
+	GUI/ugui/ui/ugui_progress.c \
+	GUI/ugui/ui/ugui_textbox.c \
+	GUI/ugui/ui/Fonts/font_6x10.c
 
-PULP_CFLAGS = -O3 -g
+PULP_CFLAGS = -Os -flto -g -IGUI -IGUI/ugui -IGUI/ugui/ui
 
 include $(PULPRT_HOME)/rules/pulp.mk
 

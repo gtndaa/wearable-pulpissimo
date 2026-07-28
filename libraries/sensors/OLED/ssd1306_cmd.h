@@ -1,6 +1,6 @@
 /**
  * @file ssd1306_cmd.h
- * @brief SSD1306 command definitions 
+ * @brief SSD1306 command definitions but also can use for SH1106
  *
  *
  * Reference: SSD1306 Datasheet

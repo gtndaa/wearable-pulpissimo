@@ -37,4 +37,15 @@ int rtc_set_time(i2c_t *i2c_handle, rtc_time_t *time);
 uint8_t dec_to_bcd(uint8_t val);
 uint8_t bcd_to_dec(uint8_t val);
 
+// Fungsi Day Tracker untuk mendeteksi pergantian hari (rollover) dari RTC DS1307
+typedef struct {
+    uint8_t last_date;
+    uint8_t last_month;
+    uint8_t last_year;
+    int     valid;
+} day_tracker_t;
+
+void day_tracker_init(day_tracker_t *dt);
+int day_tracker_check_rollover(day_tracker_t *dt, i2c_t *i2c_handle);
+
 #endif 
