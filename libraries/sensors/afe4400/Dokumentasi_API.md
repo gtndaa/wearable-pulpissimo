@@ -82,16 +82,16 @@ void pe_start(void) {}
 ## Cara Menjalankan Unit Test
 **Di laptop (simulasi, tanpa hardware):**
 ```bash
-cd /home/ariq/ICDeC/ppg_passthrough
-gcc test_ppg.c afe4400.c -I. -DSOFTWARE_TEST -o test_soft && ./test_soft
+cd ~/ICDEC/wearable-pulpissimo/libraries/sensors/afe4400
+gcc -DSOFTWARE_TEST test_ppg.c afe4400.c -o test_program && ./test_program
 ```
 **Di hardware PULPissimo (FPGA):**
 ```bash
-export PATH="$PATH:/home/ariq/ICDeC/chroot/bin"
-. /home/ariq/ICDeC/pulp-runtime/configs/pulpissimo.sh
-. /home/ariq/ICDeC/pulp-runtime/configs/fpgas/pulpissimo/genesys2.sh
+export PATH="$PATH:~/ICDEC/chroot/bin"
+. ~/ICDEC/pulp-runtime/configs/pulpissimo.sh
+. ~/ICDEC/pulp-runtime/configs/fpgas/pulpissimo/genesys2.sh
 export PULPRT_CONFIG_CFLAGS="-DARCHI_FPGA_PER_FREQUENCY=10000000 -DARCHI_FPGA_SOC_FREQUENCY=10000000"
-cd /home/ariq/ICDeC/ppg_passthrough
+cd ~/ICDEC/wearable-pulpissimo/libraries/sensors/afe4400
 make
 echo "$?"   # 0 = berhasil
 ```

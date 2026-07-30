@@ -4,18 +4,29 @@
 /* --- Mode Software Test (tanpa hardware, compile dengan -DSOFTWARE_TEST) --- */
 #ifdef SOFTWARE_TEST
 
-/* Simulasi nilai PPG — pola naik-turun menyerupai sinyal jantung */
+/* Simulasi nilai PPG — pola naik-turun menyerupai sinyal jantung.
+ * Setiap register memiliki tick counter sendiri agar fase tiap channel
+ * independen dan konsisten (seperti hardware AFE4400 yang mux LED secara
+ * bergantian dalam slot waktu terpisah). */
 static unsigned int _sim_ppg(unsigned char reg) {
-    static unsigned int tick = 0;
-    /* Nilai berbeda per register agar LED1, LED2, Ambient bisa dibedakan */
-    unsigned int base   = (reg == AFE_LED1VAL)  ? 500000 :
-                          (reg == AFE_LED2VAL)  ? 480000 : 20000;
-    unsigned int amp    = (reg == AFE_ALED1VAL) ? 5000   : 100000;
+    /* Tick terpisah per register — mencegah phase-shift akibat urutan baca */
+    static unsigned int tick_led1 = 0;
+    static unsigned int tick_led2 = 2; /* sedikit offset, simulasi timing mux */
+    static unsigned int tick_amb1 = 0;
+    static unsigned int tick_amb2 = 2;
+
     /* Tabel satu siklus gelombang sinus (10 titik) */
-    unsigned int wave[] = {0, 31, 59, 81, 95, 100, 95, 81, 59, 31};
-    unsigned int val    = base + (wave[tick % 10] * amp / 100);
-    tick++;
-    return val;
+    static const unsigned int wave[10] = {0, 31, 59, 81, 95, 100, 95, 81, 59, 31};
+
+    unsigned int base, amp, t;
+    switch (reg) {
+        case AFE_LED1VAL:  base = 500000; amp = 100000; t = tick_led1++; break;
+        case AFE_LED2VAL:  base = 480000; amp = 100000; t = tick_led2++; break;
+        case AFE_ALED1VAL: base =  20000; amp =   5000; t = tick_amb1++; break;
+        case AFE_ALED2VAL: base =  20000; amp =   5000; t = tick_amb2++; break;
+        default:           return 0;
+    }
+    return base + (wave[t % 10] * amp / 100);
 }
 
 int afe4400_init(int spi_id, int cs_pin) {

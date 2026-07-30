@@ -56,7 +56,9 @@ int main(void) {
     /* Test 5: Baca Ambient */
     printf("\n--- Test: Read Ambient Light ---\n");
     unsigned int amb_val = afe4400_read_reg(AFE_ALED1VAL);
-    TEST_PASS("afe4400_read_reg(AFE_ALED1VAL) returns OK");
+    CHECK(amb_val <= 0xFFFFFF,
+          "afe4400_read_reg(AFE_ALED1VAL) nilai valid (dalam batas 24-bit)",
+          "afe4400_read_reg(AFE_ALED1VAL) FAILED (nilai melebihi 24-bit)");
     printf("Read Ambient Value -> %u\n", amb_val);
 
     /* Test 6: Data Stream Passthrough */
