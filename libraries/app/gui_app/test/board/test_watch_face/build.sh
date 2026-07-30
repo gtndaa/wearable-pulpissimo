@@ -57,3 +57,6 @@ echo "  To run on FPGA board, execute:"
 echo "    cd $BOARD_TEST_DIR"
 echo "    make run platform=fpga"
 echo "================================================"
+
+# ELF_FILE="$BOARD_TEST_DIR/build/watch_face_test/watch_face_test"
+# riscv32-unknown-elf-size "$ELF_FILE" \
