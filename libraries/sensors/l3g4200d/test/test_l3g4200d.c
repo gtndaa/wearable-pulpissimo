@@ -1,9 +1,13 @@
 /*
  * Copyright (C) 2026 ICDeC
  *
- * Test Application: L3G4200D Gyroscope Sensor
- * Memakai library l3g4200d.c/.h hasil reverse-engineering dari raw
- * I2C test yang sudah terbukti berhasil.
+ * Test Application: L3G4200D Gyroscope Sensor (FLOAT VERSION)
+ * Versi ini SENGAJA memakai float untuk konversi deg/s, untuk menguji
+ * apakah FPU hardware tersedia di sintesis Nusacore saat ini.
+ *
+ * Jika output dps menunjukkan nilai 0.00 atau sampah, kemungkinan besar
+ * core disintesis TANPA ekstensi 'F' (FPU) dan perlu kembali ke versi
+ * integer fixed-point (l3g4200d_read_dps_x100).
  *
  * Usage:
  *   make all SENSOR=l3g4200d
@@ -17,17 +21,24 @@
 #define CONTINUOUS_NUM_SAMPLES   300     /* 0 = infinite */
 #define CONTINUOUS_DELAY_LOOPS   200000  /* delay antar pembacaan */
 
-static void print_dps_x100(int32_t v)
+/**
+ * Print float sebagai integer.fractional (2 desimal) karena printf minimal
+ * PULPissimo mungkin tidak mendukung %f. Konversi float -> integer parts
+ * juga merupakan operasi float tambahan yang menguji FPU.
+ */
+static void print_float_dps(float v)
 {
-    int sign = (v < 0) ? -1 : 1;
-    int32_t av = v * sign;
-    printf("%s%d.%02d", (sign < 0) ? "-" : " ", (int)(av / 100), (int)(av % 100));
+    int sign = (v < 0.0f) ? -1 : 1;
+    float av = v * (float)sign;
+    int integer_part = (int)av;
+    int frac_part = (int)((av - (float)integer_part) * 100.0f);
+    printf("%s%d.%02d", (sign < 0) ? "-" : " ", integer_part, frac_part);
 }
 
 static void continuous_gyro_read(void)
 {
     printf("\n========================================\n");
-    printf(" CONTINUOUS GYRO READ\n");
+    printf(" CONTINUOUS GYRO READ (FLOAT)\n");
     if (CONTINUOUS_NUM_SAMPLES > 0)
         printf(" Jumlah sampel: %d\n", CONTINUOUS_NUM_SAMPLES);
     else
@@ -48,13 +59,13 @@ static void continuous_gyro_read(void)
             continue;
         }
 
-        l3g4200d_dps_x100_t dps;
-        l3g4200d_read_dps_x100(&dps); /* pakai raw yang sama secara implisit lewat read ulang */
+        l3g4200d_dps_float_t dps;
+        l3g4200d_read_dps_float(&dps);
 
         printf(" %4d  | %6d  %6d  %6d  | ", sample, raw.x, raw.y, raw.z);
-        print_dps_x100(dps.x_x100); printf("   ");
-        print_dps_x100(dps.y_x100); printf("   ");
-        print_dps_x100(dps.z_x100); printf(" dps\n");
+        print_float_dps(dps.x); printf("   ");
+        print_float_dps(dps.y); printf("   ");
+        print_float_dps(dps.z); printf(" dps\n");
 
         sample++;
         if (CONTINUOUS_NUM_SAMPLES > 0 && sample >= CONTINUOUS_NUM_SAMPLES)
@@ -74,8 +85,9 @@ int main()
     int fail_count = 0;
 
     printf("========================================\n");
-    printf(" L3G4200D Gyroscope Test (via library)\n");
+    printf(" L3G4200D Gyroscope Test (FLOAT)\n");
     printf(" ICDeC PULPissimo FPGA Board\n");
+    printf(" Menguji FPU hardware via operasi float\n");
     printf("========================================\n\n");
 
     /* ---- Test 1: Default config ---- */
@@ -120,17 +132,17 @@ int main()
     }
     printf("\n");
 
-    /* ---- Test 4: Baca raw + dps sekali ---- */
-    printf("[TEST 4] Membaca data gyro sekali...\n");
+    /* ---- Test 4: Baca raw + dps (FLOAT) sekali ---- */
+    printf("[TEST 4] Membaca data gyro sekali (FLOAT)...\n");
     l3g4200d_raw_t raw;
-    l3g4200d_dps_x100_t dps;
+    l3g4200d_dps_float_t dps;
     status = l3g4200d_read_raw(&raw);
     if (status == L3G4200D_OK) {
-        l3g4200d_read_dps_x100(&dps);
+        l3g4200d_read_dps_float(&dps);
         printf("  Raw: X=%d Y=%d Z=%d\n", raw.x, raw.y, raw.z);
-        printf("  dps: X="); print_dps_x100(dps.x_x100);
-        printf(" Y="); print_dps_x100(dps.y_x100);
-        printf(" Z="); print_dps_x100(dps.z_x100);
+        printf("  dps: X="); print_float_dps(dps.x);
+        printf(" Y="); print_float_dps(dps.y);
+        printf(" Z="); print_float_dps(dps.z);
         printf("\n  PASS\n");
         pass_count++;
     } else {

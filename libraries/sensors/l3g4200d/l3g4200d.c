@@ -314,6 +314,45 @@ l3g4200d_status_t l3g4200d_read_dps_x100(l3g4200d_dps_x100_t *dps)
     return L3G4200D_OK;
 }
 
+l3g4200d_status_t l3g4200d_read_dps_float(l3g4200d_dps_float_t *dps)
+{
+    if (dps == NULL) {
+        return L3G4200D_ERR_NULL;
+    }
+
+    l3g4200d_raw_t raw;
+    l3g4200d_status_t status = l3g4200d_read_raw(&raw);
+    if (status != L3G4200D_OK) {
+        return status;
+    }
+
+    /* Konversi pakai FLOAT -- sengaja untuk menguji FPU hardware.
+     * Sensitivity: mdps/digit -> dps/digit = mdps / 1000.0f
+     *   250dps  -> 8.75  mdps/digit -> 0.00875f  dps/digit
+     *   500dps  -> 17.50 mdps/digit -> 0.01750f  dps/digit
+     *   2000dps -> 70.00 mdps/digit -> 0.07000f  dps/digit
+     */
+    float sens_dps;
+    switch (l3g_state.range) {
+        case L3G4200D_RANGE_500DPS:
+            sens_dps = 17.50f / 1000.0f;
+            break;
+        case L3G4200D_RANGE_2000DPS:
+            sens_dps = 70.00f / 1000.0f;
+            break;
+        case L3G4200D_RANGE_250DPS:
+        default:
+            sens_dps = 8.75f / 1000.0f;
+            break;
+    }
+
+    dps->x = (float)raw.x * sens_dps;
+    dps->y = (float)raw.y * sens_dps;
+    dps->z = (float)raw.z * sens_dps;
+
+    return L3G4200D_OK;
+}
+
 l3g4200d_status_t l3g4200d_set_range(l3g4200d_range_t range)
 {
     if (!l3g_state.initialized) {

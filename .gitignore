@@ -21,6 +21,8 @@ libraries/gui/src/ui/.eez-project-build
 libraries/sensors/afe4400/build/
 libraries/sensors/afe4400/test_soft
 
+libraries/Classification/test/build
+
 libraries/sensors/DS1307/build/
 libraries/sensors/DS1307/test_host
 libraries/sensors/DS1307/build.sh

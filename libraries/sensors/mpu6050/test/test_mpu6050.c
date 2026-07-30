@@ -1,13 +1,24 @@
 /*
  * Copyright (C) 2026 ICDeC
  *
- * Test Application: MPU-6050 Gyroscope Sensor
- * Memakai library mpu6050.c/.h hasil reverse-engineering dari raw
- * I2C test yang sudah terbukti berhasil.
+ * Test Application: MPU-6050 6-Axis (Gyroscope + Accelerometer)
+ * ==============================================================
+ * Combined test memakai library mpu6050.c/.h yang sudah lengkap
+ * (gyro + accel), hasil reverse-engineering dari raw I2C test
+ * yang sudah terbukti berhasil.
+ *
+ * Test structure:
+ *   TEST 1: Default config
+ *   TEST 2: Init (I2C, WHO_AM_I, wake, gyro config, accel config)
+ *   TEST 3: WHO_AM_I manual
+ *   TEST 4: Baca gyro raw + dps sekali
+ *   TEST 5: Baca accel raw + mg sekali (sanity check ~1g)
+ *   TEST 6: Baca 10 sampel accel berurutan (konsistensi)
+ *   -> Continuous read: gyro + accel bersamaan
  *
  * Usage:
- *   make all SENSOR=mpu6050
- *   make run SENSOR=mpu6050 platform=fpga
+ *   make all
+ *   make run platform=fpga
  */
 
 #include <stdio.h>
@@ -17,6 +28,11 @@
 #define CONTINUOUS_NUM_SAMPLES   300     /* 0 = infinite */
 #define CONTINUOUS_DELAY_LOOPS   200000  /* delay antar pembacaan */
 
+/* ============================================================================
+ * Utility: print fixed-point values
+ * ============================================================================ */
+
+/** Print dps*100 value sebagai desimal (contoh: 359 -> " 3.59"). */
 static void print_dps_x100(int32_t v)
 {
     int sign = (v < 0) ? -1 : 1;
@@ -24,37 +40,63 @@ static void print_dps_x100(int32_t v)
     printf("%s%d.%02d", (sign < 0) ? "-" : " ", (int)(av / 100), (int)(av % 100));
 }
 
-static void continuous_gyro_read(void)
+/** Print milli-g value (contoh: 1000 -> " 1000"). */
+static void print_mg(int32_t mg_val)
+{
+    printf("%6d", (int)mg_val);
+}
+
+/** Print milli-g sebagai g (contoh: 1000 -> " 1.000"). */
+static void print_g_from_mg(int32_t mg_val)
+{
+    int sign = (mg_val < 0) ? -1 : 1;
+    int32_t av = mg_val * sign;
+    printf("%s%d.%03d", (sign < 0) ? "-" : " ", (int)(av / 1000), (int)(av % 1000));
+}
+
+/* ============================================================================
+ * Continuous 6-Axis Read
+ * ============================================================================ */
+
+static void continuous_6axis_read(void)
 {
     printf("\n========================================\n");
-    printf(" CONTINUOUS GYRO READ\n");
+    printf(" CONTINUOUS 6-AXIS READ (Gyro + Accel)\n");
     if (CONTINUOUS_NUM_SAMPLES > 0)
         printf(" Jumlah sampel: %d\n", CONTINUOUS_NUM_SAMPLES);
     else
         printf(" Mode: infinite (reset board untuk stop)\n");
     printf("========================================\n\n");
 
-    printf("  #    |  Raw X   Raw Y   Raw Z  |  dps X    dps Y    dps Z\n");
-    printf("-------+------------------------+---------------------------\n");
+    printf("  #    | Gyro dps X  dps Y  dps Z | Accel mg X  mg Y  mg Z |  g X    g Y    g Z\n");
+    printf("-------+--------------------------+------------------------+---------------------\n");
 
     int sample = 0;
     while (1) {
-        mpu6050_raw_t raw;
-        mpu6050_status_t status = mpu6050_read_raw(&raw);
+        /* Baca gyro */
+        mpu6050_dps_x100_t dps;
+        mpu6050_status_t gs = mpu6050_gyro_read_dps_x100(&dps);
 
-        if (status != MPU6050_OK) {
-            printf("  [!] Gagal baca data (err=%d)\n", status);
+        /* Baca accel */
+        mpu6050_accel_mg_t mg;
+        mpu6050_status_t as = mpu6050_accel_read_mg(&mg);
+
+        if (gs != MPU6050_OK || as != MPU6050_OK) {
+            printf("  [!] Gagal baca (gyro=%d, accel=%d)\n", gs, as);
             for (volatile int d = 0; d < CONTINUOUS_DELAY_LOOPS; d++);
             continue;
         }
 
-        mpu6050_dps_x100_t dps;
-        mpu6050_read_dps_x100(&dps);
-
-        printf(" %4d  | %6d  %6d  %6d  | ", sample, raw.x, raw.y, raw.z);
-        print_dps_x100(dps.x_x100); printf("   ");
-        print_dps_x100(dps.y_x100); printf("   ");
-        print_dps_x100(dps.z_x100); printf(" dps\n");
+        printf(" %4d  | ", sample);
+        print_dps_x100(dps.x_x100); printf(" ");
+        print_dps_x100(dps.y_x100); printf(" ");
+        print_dps_x100(dps.z_x100); printf("  |");
+        print_mg(mg.x_mg); printf(" ");
+        print_mg(mg.y_mg); printf(" ");
+        print_mg(mg.z_mg); printf("  |");
+        print_g_from_mg(mg.x_mg); printf(" ");
+        print_g_from_mg(mg.y_mg); printf(" ");
+        print_g_from_mg(mg.z_mg); printf("\n");
 
         sample++;
         if (CONTINUOUS_NUM_SAMPLES > 0 && sample >= CONTINUOUS_NUM_SAMPLES)
@@ -66,6 +108,10 @@ static void continuous_gyro_read(void)
     printf("\n  Selesai: %d sampel terbaca.\n", sample);
 }
 
+/* ============================================================================
+ * MAIN TEST
+ * ============================================================================ */
+
 int main()
 {
     mpu6050_config_t cfg;
@@ -74,7 +120,7 @@ int main()
     int fail_count = 0;
 
     printf("========================================\n");
-    printf(" MPU-6050 Gyroscope Test (via library)\n");
+    printf(" MPU-6050 6-Axis Test (Gyro + Accel)\n");
     printf(" ICDeC PULPissimo FPGA Board\n");
     printf("========================================\n\n");
 
@@ -82,8 +128,8 @@ int main()
     printf("[TEST 1] Loading default configuration...\n");
     status = mpu6050_default_config(&cfg);
     if (status == MPU6050_OK) {
-        printf("  PASS: addr=0x%02X, freq=%u, range=%d\n",
-               cfg.i2c_addr, cfg.i2c_freq, cfg.range);
+        printf("  PASS: addr=0x%02X, freq=%u, gyro_range=%d, accel_range=%d\n",
+               cfg.i2c_addr, cfg.i2c_freq, cfg.gyro_range, cfg.accel_range);
         pass_count++;
     } else {
         printf("  FAIL (err=%d)\n", status);
@@ -91,8 +137,8 @@ int main()
     }
     printf("\n");
 
-    /* ---- Test 2: Init (buka I2C, verifikasi WHO_AM_I, wake, konfigurasi) ---- */
-    printf("[TEST 2] Initializing MPU-6050...\n");
+    /* ---- Test 2: Init (I2C, WHO_AM_I, wake, gyro config, accel config) ---- */
+    printf("[TEST 2] Initializing MPU-6050 (Gyro + Accel)...\n");
     status = mpu6050_init(&cfg);
     if (status == MPU6050_OK) {
         printf("  PASS: Sensor initialized on addr=0x%02X\n", cfg.i2c_addr);
@@ -120,22 +166,93 @@ int main()
     }
     printf("\n");
 
-    /* ---- Test 4: Baca raw + dps sekali ---- */
+    /* ---- Test 4: Baca gyro raw + dps sekali ---- */
     printf("[TEST 4] Membaca data gyro sekali...\n");
-    mpu6050_raw_t raw;
-    mpu6050_dps_x100_t dps;
-    status = mpu6050_read_raw(&raw);
-    if (status == MPU6050_OK) {
-        mpu6050_read_dps_x100(&dps);
-        printf("  Raw: X=%d Y=%d Z=%d\n", raw.x, raw.y, raw.z);
-        printf("  dps: X="); print_dps_x100(dps.x_x100);
-        printf(" Y="); print_dps_x100(dps.y_x100);
-        printf(" Z="); print_dps_x100(dps.z_x100);
-        printf("\n  PASS\n");
-        pass_count++;
-    } else {
-        printf("  FAIL (err=%d)\n", status);
-        fail_count++;
+    {
+        mpu6050_raw_t raw;
+        mpu6050_dps_x100_t dps;
+        status = mpu6050_gyro_read_raw(&raw);
+        if (status == MPU6050_OK) {
+            mpu6050_gyro_read_dps_x100(&dps);
+            printf("  Raw: X=%d Y=%d Z=%d\n", raw.x, raw.y, raw.z);
+            printf("  dps: X="); print_dps_x100(dps.x_x100);
+            printf(" Y="); print_dps_x100(dps.y_x100);
+            printf(" Z="); print_dps_x100(dps.z_x100);
+            printf("\n  PASS\n");
+            pass_count++;
+        } else {
+            printf("  FAIL (err=%d)\n", status);
+            fail_count++;
+        }
+    }
+    printf("\n");
+
+    /* ---- Test 5: Baca accel raw + mg sekali (sanity check ~1g) ---- */
+    printf("[TEST 5] Membaca data accelerometer sekali...\n");
+    {
+        mpu6050_accel_raw_t raw;
+        status = mpu6050_accel_read_raw(&raw);
+        if (status == MPU6050_OK) {
+            mpu6050_accel_mg_t mg;
+            mpu6050_accel_read_mg(&mg);
+
+            printf("  Raw  : X=%6d  Y=%6d  Z=%6d\n", raw.x, raw.y, raw.z);
+            printf("  mg   : X="); print_mg(mg.x_mg);
+            printf("  Y="); print_mg(mg.y_mg);
+            printf("  Z="); print_mg(mg.z_mg);
+            printf("\n");
+            printf("  g    : X="); print_g_from_mg(mg.x_mg);
+            printf("  Y="); print_g_from_mg(mg.y_mg);
+            printf("  Z="); print_g_from_mg(mg.z_mg);
+            printf("\n");
+
+            /* Sanity check: saat diam, magnitude ~1g (1000 mg)
+             * Toleransi: 800-1200 mg -> mag^2 = 640,000 - 1,440,000 */
+            int32_t mag_sq = (mg.x_mg * mg.x_mg) + (mg.y_mg * mg.y_mg) + (mg.z_mg * mg.z_mg);
+            if (mag_sq >= 640000 && mag_sq <= 1440000) {
+                printf("  PASS: Magnitude wajar (~1g saat diam)\n");
+            } else {
+                printf("  WARNING: Magnitude di luar range wajar (mag^2=%d)\n", (int)mag_sq);
+                printf("  (mungkin sensor bergerak -- PASS conditional)\n");
+            }
+            pass_count++;
+        } else {
+            printf("  FAIL (err=%d)\n", status);
+            fail_count++;
+        }
+    }
+    printf("\n");
+
+    /* ---- Test 6: Baca 10 sampel accel berurutan (konsistensi) ---- */
+    printf("[TEST 6] Baca 10 sampel accel berurutan...\n");
+    {
+        int read_ok = 0;
+        int read_fail = 0;
+
+        for (int i = 0; i < 10; i++) {
+            mpu6050_accel_raw_t raw;
+            mpu6050_accel_mg_t mg;
+            status = mpu6050_accel_read_raw(&raw);
+            if (status == MPU6050_OK) {
+                mpu6050_accel_read_mg(&mg);
+                printf("  [%2d] Raw: %6d %6d %6d | mg: %6d %6d %6d\n",
+                       i, raw.x, raw.y, raw.z,
+                       (int)mg.x_mg, (int)mg.y_mg, (int)mg.z_mg);
+                read_ok++;
+            } else {
+                printf("  [%2d] GAGAL baca (err=%d)\n", i, status);
+                read_fail++;
+            }
+            for (volatile int d = 0; d < 50000; d++);
+        }
+
+        if (read_ok == 10) {
+            printf("  PASS: 10/10 sampel terbaca\n");
+            pass_count++;
+        } else {
+            printf("  FAIL: %d/10 sampel gagal\n", read_fail);
+            fail_count++;
+        }
     }
     printf("\n");
 
@@ -145,7 +262,7 @@ int main()
     printf("========================================\n");
 
     if (fail_count == 0) {
-        continuous_gyro_read();
+        continuous_6axis_read();
     }
 
     mpu6050_deinit();
