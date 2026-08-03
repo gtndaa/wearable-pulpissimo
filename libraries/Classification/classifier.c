@@ -132,7 +132,7 @@ void extract_features_gyro(const imu_sample_t *buf, int n,
  * Hierarchical Decision Tree
  *
  * L1: SMA → rest/active
- * L2: mean_abs → still | tilt → sit/stand
+ * L2: mean_abs → still | tilt → sit/stand/lie
  * L3: SVM + energy → fall
  * L4: ZCR + energy → walk/run
  * ============================================================================ */
@@ -147,9 +147,12 @@ static activity_t decide(const accel_features_t *af, const gyro_features_t *gf)
             return ACTIVITY_STILL;
         }
 
-        /* L2: Postur */
+        /* L2: Postur — Stand vs Sit vs Lie (tilt ratio) */
         if (af->tilt_ratio > CLF_TILT_STAND_THRESHOLD) {
             return ACTIVITY_STAND;
+        } else if (abs32(af->tilt_ratio) < CLF_TILT_LIE_THRESHOLD) {
+            /* Sumbu Z ~tegak lurus gravitasi → badan horizontal */
+            return ACTIVITY_LIE;
         } else {
             return ACTIVITY_SIT;
         }

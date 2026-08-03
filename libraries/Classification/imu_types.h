@@ -34,6 +34,7 @@ typedef enum {
     ACTIVITY_STILL,        /**< Diam total */
     ACTIVITY_SIT,          /**< Duduk */
     ACTIVITY_STAND,        /**< Berdiri */
+    ACTIVITY_LIE,          /**< Tiduran / rebahan (badan horizontal) */
     ACTIVITY_WALK,         /**< Berjalan */
     ACTIVITY_RUN,          /**< Berlari */
     ACTIVITY_FALL,         /**< Jatuh */

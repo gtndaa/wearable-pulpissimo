@@ -1,12 +1,13 @@
-/*
+/* ============================================================================
+ * ICDeC Activity Classifier
+ * File   : test/test_classifier_hw.c
+ * Module : Hardware Test (PULPissimo FPGA + MPU-6050)
  * Copyright (C) 2026 ICDeC
- *
- * Hardware Test: Activity Classifier on PULPissimo FPGA + MPU-6050
- * ================================================================
+ * ============================================================================
  *
  * Test ini menjalankan pipeline classifier LENGKAP di hardware asli:
- *   1. Inisialisasi MPU-6050 (I2C, WHO_AM_I, wake, config)
- *   2. Baca data 6-axis (accel + gyro) melalui adapter
+ *   1. Inisialisasi MPU-6050 (I2C, WHO_AM_I, wake, config — via mpu6050_init())
+ *   2. Baca data 6-axis (accel + gyro) melalui adapter (satu panggilan)
  *   3. Feed ke classifier secara real-time
  *   4. Tampilkan hasil klasifikasi + fitur per window
  *
@@ -23,7 +24,7 @@
  * Usage:
  *   make all
  *   make run platform=fpga
- */
+ * ============================================================================ */
 
 #include <stdio.h>
 #include "pulp.h"
@@ -60,7 +61,7 @@
 #define SHOW_FEATURES           1
 
 /* ============================================================================
- * Helper: Nama aktivitas
+ * Helper: nama aktivitas untuk output readable
  * ============================================================================ */
 
 static const char *activity_name(activity_t act)
@@ -70,6 +71,7 @@ static const char *activity_name(activity_t act)
         case ACTIVITY_STILL:   return "STILL  ";
         case ACTIVITY_SIT:     return "SIT    ";
         case ACTIVITY_STAND:   return "STAND  ";
+        case ACTIVITY_LIE:     return "LIE    ";
         case ACTIVITY_WALK:    return "WALK   ";
         case ACTIVITY_RUN:     return "RUN    ";
         case ACTIVITY_FALL:    return "FALL   ";
@@ -77,323 +79,242 @@ static const char *activity_name(activity_t act)
     }
 }
 
+/** Nama status mpu6050 untuk pesan error yang informatif. */
+static const char *mpu6050_status_name(mpu6050_status_t st)
+{
+    switch (st) {
+        case MPU6050_OK:          return "OK";
+        case MPU6050_ERR_I2C:     return "ERR_I2C";
+        case MPU6050_ERR_ID:      return "ERR_ID";
+        case MPU6050_ERR_CONFIG:  return "ERR_CONFIG";
+        case MPU6050_ERR_TIMEOUT: return "ERR_TIMEOUT";
+        case MPU6050_ERR_NULL:    return "ERR_NULL";
+        default:                  return "???";
+    }
+}
+
 /* ============================================================================
- * Test 1: Sensor Init
- *
- * Menggunakan mpu6050 library API (bukan raw I2C).
- * Memastikan sensor terhubung dan terkonfigurasi sebelum classifier jalan.
+ * Delay sederhana (busy-wait, tanpa timer HW)
  * ============================================================================ */
 
-static int test_sensor_init(mpu6050_config_t *cfg)
+static void simple_delay(int loops)
 {
+    volatile int i;
+    for (i = 0; i < loops; i++) {
+        __asm__ volatile ("nop");
+    }
+}
+
+/* ============================================================================
+ * Inisialisasi MPU-6050
+ *
+ * mpu6050_init() SUDAH mencakup: buka I2C, coba alamat 0x69 lalu 0x68,
+ * verifikasi WHO_AM_I, wake dari sleep, dan konfigurasi GYRO_CONFIG/
+ * ACCEL_CONFIG/DLPF/SMPLRT_DIV — jadi tidak perlu panggilan terpisah
+ * untuk wake atau config default.
+ * ============================================================================ */
+
+static int init_sensor(void)
+{
+    mpu6050_config_t cfg;
     mpu6050_status_t status;
+    uint8_t who_am_i = 0;
 
-    printf("[TEST 1] Loading default configuration...\n");
-    status = mpu6050_default_config(cfg);
+    printf("Inisialisasi MPU-6050...\n");
+
+    status = mpu6050_default_config(&cfg);
     if (status != MPU6050_OK) {
-        printf("  FAIL: mpu6050_default_config() err=%d\n", status);
+        printf("ERROR: mpu6050_default_config() gagal (%s)\n",
+               mpu6050_status_name(status));
         return -1;
     }
-    printf("  OK: addr=0x%02X, gyro_range=%d, accel_range=%d\n",
-           cfg->i2c_addr, cfg->gyro_range, cfg->accel_range);
 
-    printf("[TEST 2] Initializing MPU-6050...\n");
-    status = mpu6050_init(cfg);
+    status = mpu6050_init(&cfg);
     if (status != MPU6050_OK) {
-        printf("  FAIL: mpu6050_init() err=%d\n", status);
+        printf("ERROR: mpu6050_init() gagal (%s)\n",
+               mpu6050_status_name(status));
         return -1;
     }
-    printf("  OK: Sensor initialized on addr=0x%02X\n\n", cfg->i2c_addr);
 
+    status = mpu6050_who_am_i(&who_am_i);
+    if (status != MPU6050_OK) {
+        printf("ERROR: mpu6050_who_am_i() gagal (%s)\n",
+               mpu6050_status_name(status));
+        return -1;
+    }
+
+    printf("  WHO_AM_I = 0x%02X (expected 0x%02X)\n",
+           who_am_i, MPU6050_WHO_AM_I_VALUE);
+    if (who_am_i != MPU6050_WHO_AM_I_VALUE) {
+        printf("ERROR: WHO_AM_I mismatch, sensor tidak terdeteksi!\n");
+        return -1;
+    }
+
+    printf("MPU-6050 siap (I2C addr=0x%02X).\n\n", cfg.i2c_addr);
     return 0;
 }
 
 /* ============================================================================
- * Test 2: Adapter Sanity Check
+ * Baca satu sampel dari sensor via adapter
  *
- * Verifikasi bahwa mpu6050_to_imu_sample() menghasilkan data yang wajar.
- * Saat sensor diam, magnitude accel harus ~1g.
+ * mpu6050_to_imu_sample() melakukan KEDUA pembacaan (accel + gyro) dan
+ * langsung mengisi imu_sample_t — tidak perlu struct raw perantara.
  * ============================================================================ */
 
-static int test_adapter_sanity(void)
+static int read_sample(imu_sample_t *sample)
 {
-    printf("[TEST 3] Adapter sanity check (mpu6050_to_imu_sample)...\n");
-
-    imu_sample_t sample;
-    mpu6050_status_t status = mpu6050_to_imu_sample(&sample);
+    mpu6050_status_t status = mpu6050_to_imu_sample(sample);
 
     if (status != MPU6050_OK) {
-        printf("  FAIL: mpu6050_to_imu_sample() err=%d\n", status);
+        printf("  [WARN] Baca sampel gagal (%s)\n",
+               mpu6050_status_name(status));
         return -1;
     }
-
-    printf("  Raw accel: ax=%6d  ay=%6d  az=%6d\n",
-           sample.ax, sample.ay, sample.az);
-    printf("  Raw gyro:  gx=%6d  gy=%6d  gz=%6d\n",
-           sample.gx, sample.gy, sample.gz);
-
-    /* Sanity: magnitude accel raw saat diam harus ~16384 (1g pada ±2g range)
-     * Toleransi sangat longgar karena sensor bisa miring:
-     * raw² = ax²+ay²+az² ≈ 16384² = 268,435,456
-     * Range: 50% - 150% → 134,217,728 - 402,653,184 */
-    int32_t ax32 = (int32_t)sample.ax;
-    int32_t ay32 = (int32_t)sample.ay;
-    int32_t az32 = (int32_t)sample.az;
-    /* Hitung dalam satuan (raw/16)² untuk menghindari overflow */
-    int32_t mag_scaled = (ax32/16)*(ax32/16) + (ay32/16)*(ay32/16) + (az32/16)*(az32/16);
-    /* 1g/16 = 1024, 1024² = 1,048,576. Range: 500,000 - 1,500,000 */
-    if (mag_scaled >= 500000 && mag_scaled <= 1500000) {
-        printf("  OK: Accel magnitude wajar (~1g)\n\n");
-    } else {
-        printf("  WARNING: Accel magnitude di luar range (mag_scaled=%d)\n", (int)mag_scaled);
-        printf("  (sensor mungkin bergerak, tetap lanjut)\n\n");
-    }
-
     return 0;
 }
 
 /* ============================================================================
- * Test 3: Single Window Classification
- *
- * Kumpulkan CLF_WINDOW_SIZE sampel, lalu klasifikasi satu window.
- * Tampilkan fitur yang diekstrak (untuk tuning).
+ * Tampilkan fitur untuk debugging/tuning
  * ============================================================================ */
 
-static int test_single_window(void)
+static void print_features(const imu_sample_t *buf, int n)
 {
-    printf("[TEST 4] Single window classification (%d sampel)...\n",
-           CLF_WINDOW_SIZE);
-
-    classifier_init();
-
-    imu_sample_t window_data[CLF_WINDOW_SIZE];
-    int i;
-
-    for (i = 0; i < CLF_WINDOW_SIZE; i++) {
-        imu_sample_t sample;
-        mpu6050_status_t status = mpu6050_to_imu_sample(&sample);
-        if (status != MPU6050_OK) {
-            printf("  FAIL: Gagal baca sampel ke-%d (err=%d)\n", i, status);
-            return -1;
-        }
-        window_data[i] = sample;
-
-#if VERBOSE_RAW
-        printf("  [%2d] ax=%6d ay=%6d az=%6d | gx=%6d gy=%6d gz=%6d\n",
-               i, sample.ax, sample.ay, sample.az,
-               sample.gx, sample.gy, sample.gz);
-#endif
-
-        for (volatile int d = 0; d < SAMPLE_DELAY_LOOPS; d++);
-    }
-
-    /* Ekstrak fitur untuk tampilan (tuning) */
     accel_features_t af;
     gyro_features_t gf;
-    extract_features_accel(window_data, CLF_WINDOW_SIZE, &af);
-    extract_features_gyro(window_data, CLF_WINDOW_SIZE, &gf);
 
-    printf("  --- Fitur Accelerometer ---\n");
-    printf("  SMA          = %d (threshold rest: %d)\n",
-           (int)af.sma, (int)CLF_SMA_REST_THRESHOLD);
-    printf("  SVM_max      = %u (threshold fall: %u)\n",
-           (unsigned int)af.svm_max, (unsigned int)CLF_SVM_FALL_THRESHOLD);
-    printf("  Tilt ratio   = %d (threshold stand: %d)\n",
-           (int)af.tilt_ratio, (int)CLF_TILT_STAND_THRESHOLD);
+    extract_features_accel(buf, n, &af);
+    extract_features_gyro(buf, n, &gf);
 
-    printf("  --- Fitur Gyroscope ---\n");
-    printf("  Energy       = %d (threshold walk: %d, run: %d, fall: %d)\n",
-           (int)gf.energy,
-           (int)CLF_GYRO_ENERGY_WALK_THRESHOLD,
-           (int)CLF_GYRO_ENERGY_RUN_THRESHOLD,
-           (int)CLF_GYRO_ENERGY_FALL_THRESHOLD);
-    printf("  ZCR          = %d (threshold walk min: %d)\n",
-           (int)gf.zcr, (int)CLF_GYRO_ZCR_WALK_MIN);
-    printf("  Mean abs     = %d (threshold still: %d)\n",
-           (int)gf.mean_abs, (int)CLF_GYRO_MEAN_ABS_STILL_THRESHOLD);
-
-    /* Klasifikasi menggunakan API langsung (bukan classifier_update,
-     * karena kita sudah punya buffer sendiri) */
-    classifier_init();
-    for (i = 0; i < CLF_WINDOW_SIZE; i++) {
-        classifier_push_sample(&window_data[i]);
-    }
-    activity_t result = classifier_classify();
-
-    printf("  --- Hasil ---\n");
-    printf("  Klasifikasi: %s (kode=%d)\n\n", activity_name(result), result);
-
-    return 0;
+    printf("    [Fitur] SMA=%ld SVM_max=%lu tilt=%ld | "
+           "energy=%ld zcr=%ld mean_abs=%ld\n",
+           (long)af.sma, (unsigned long)af.svm_max, (long)af.tilt_ratio,
+           (long)gf.energy, (long)gf.zcr, (long)gf.mean_abs);
 }
 
 /* ============================================================================
- * Test 4: Continuous Classification
- *
- * Jalankan classifier secara real-time: baca sensor → update → tampilkan
- * hasil setiap kali window penuh.
- *
- * Ini adalah mode operasi sesungguhnya yang akan dipakai di firmware final.
+ * Mode: Single window classification (verbose, untuk debugging)
  * ============================================================================ */
 
-static void test_continuous_classification(void)
+static void run_single_window_test(void)
 {
-    printf("========================================\n");
-    printf(" CONTINUOUS CLASSIFICATION\n");
-    printf(" Window size: %d sampel\n", CLF_WINDOW_SIZE);
-    if (NUM_WINDOWS > 0)
-        printf(" Jumlah window: %d (total %d sampel)\n",
-               NUM_WINDOWS, NUM_WINDOWS * CLF_WINDOW_SIZE);
-    else
-        printf(" Mode: infinite (reset board untuk stop)\n");
-    printf("========================================\n\n");
+    printf("=== Mode: Single Window Test ===\n\n");
+
+    classifier_init();
+    imu_sample_t window_copy[CLF_WINDOW_SIZE]; /* untuk print_features setelahnya */
+    int idx = 0;
+
+    printf("Mengumpulkan %d sampel...\n", CLF_WINDOW_SIZE);
+
+    activity_t result = ACTIVITY_UNKNOWN;
+    while (result == ACTIVITY_UNKNOWN) {
+        imu_sample_t s;
+        if (read_sample(&s) != 0) {
+            printf("ERROR: gagal baca sampel dari sensor!\n");
+            return;
+        }
+
+        if (idx < CLF_WINDOW_SIZE) {
+            window_copy[idx++] = s;
+        }
+
+        if (VERBOSE_RAW) {
+            printf("  ax=%6d ay=%6d az=%6d gx=%6d gy=%6d gz=%6d\n",
+                   s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
+        }
+
+        result = classifier_update(&s);
+        simple_delay(SAMPLE_DELAY_LOOPS);
+    }
+
+    printf("  Klasifikasi: %s (kode=%d)\n\n", activity_name(result), result);
+
+    if (SHOW_FEATURES) {
+        print_features(window_copy, idx);
+    }
+}
+
+/* ============================================================================
+ * Mode: Continuous classification (real-time monitoring)
+ * ============================================================================ */
+
+static void run_continuous_test(void)
+{
+    printf("=== Mode: Continuous Classification ===\n\n");
 
     classifier_init();
 
+    imu_sample_t window_copy[CLF_WINDOW_SIZE];
+    int idx = 0;
     int window_count = 0;
-    int sample_count = 0;
-    int read_errors = 0;
+    long sample_count = 0;
 
-    /* Shadow buffer: salinan lokal sampel per window.
-     * Dibutuhkan karena classifier_update() me-reset window internal
-     * setelah classify — tanpa ini kita tidak bisa ekstrak fitur.
-     * Biaya: CLF_WINDOW_SIZE × 12 = 384 bytes tambahan di stack.
-     * Pada firmware final (bukan debug), buffer ini tidak diperlukan. */
-    imu_sample_t shadow_buf[CLF_WINDOW_SIZE];
-    int shadow_idx = 0;
-
-    /* Header tabel */
-#if SHOW_FEATURES
-    printf(" Win |  Result  |    SMA    SVM_max   Tilt |  Energy  ZCR  MeanAbs\n");
-    printf("-----+----------+-------------------------+------------------------\n");
-#else
-    printf(" Win | Sampel |  Result\n");
-    printf("-----+--------+---------\n");
-#endif
-
-    while (1) {
-        imu_sample_t sample;
-        mpu6050_status_t status = mpu6050_to_imu_sample(&sample);
-
-        if (status != MPU6050_OK) {
-            read_errors++;
-            if (read_errors > 10) {
-                printf("\n  [!] Terlalu banyak error baca (%d), berhenti.\n",
-                       read_errors);
-                break;
-            }
-            for (volatile int d = 0; d < SAMPLE_DELAY_LOOPS; d++);
-            continue;
+    while (NUM_WINDOWS == 0 || window_count < NUM_WINDOWS) {
+        imu_sample_t s;
+        if (read_sample(&s) != 0) {
+            printf("ERROR: gagal baca sampel dari sensor!\n");
+            return;
         }
 
-        /* Simpan salinan di shadow buffer */
-        shadow_buf[shadow_idx] = sample;
-        shadow_idx++;
+        if (idx < CLF_WINDOW_SIZE) {
+            window_copy[idx++] = s;
+        }
 
+        if (VERBOSE_RAW) {
+            printf("  [%ld] ax=%6d ay=%6d az=%6d gx=%6d gy=%6d gz=%6d\n",
+                   sample_count, s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
+        }
+
+        activity_t result = classifier_update(&s);
         sample_count++;
-        activity_t result = classifier_update(&sample);
 
         if (result != ACTIVITY_UNKNOWN) {
             window_count++;
+            printf("[Window %d] Klasifikasi: %s\n",
+                   window_count, activity_name(result));
 
-#if SHOW_FEATURES
-            /* Ekstrak fitur dari shadow buffer (salinan window yang baru
-             * saja diklasifikasi). Ini memungkinkan kita melihat SEMUA
-             * nilai fitur + hasil klasifikasi berdampingan — sangat
-             * berguna untuk tuning threshold di classifier_config.h. */
-            accel_features_t af;
-            gyro_features_t gf;
-            extract_features_accel(shadow_buf, CLF_WINDOW_SIZE, &af);
-            extract_features_gyro(shadow_buf, CLF_WINDOW_SIZE, &gf);
-
-            printf(" %3d | %s | %7d %10u %5d | %7d  %3d  %7d\n",
-                   window_count, activity_name(result),
-                   (int)af.sma, (unsigned int)af.svm_max, (int)af.tilt_ratio,
-                   (int)gf.energy, (int)gf.zcr, (int)gf.mean_abs);
-#else
-            printf(" %3d | %5d  | %s\n",
-                   window_count, sample_count, activity_name(result));
-#endif
-
-            /* Reset shadow buffer untuk window berikutnya */
-            shadow_idx = 0;
-
-            if (NUM_WINDOWS > 0 && window_count >= NUM_WINDOWS) {
-                break;
+            if (SHOW_FEATURES) {
+                print_features(window_copy, idx);
             }
+
+            idx = 0;
         }
 
-        for (volatile int d = 0; d < SAMPLE_DELAY_LOOPS; d++);
+        if (!VERBOSE_RAW && (sample_count % 50 == 0)) {
+            printf("  ... %d window, %ld sampel, hasil terakhir: %s\n",
+                   window_count, sample_count, activity_name(result));
+        }
+
+        simple_delay(SAMPLE_DELAY_LOOPS);
     }
 
-    printf("\n  Selesai: %d window, %d sampel, %d errors\n",
-           window_count, sample_count, read_errors);
+    printf("\nSelesai: %d window diklasifikasi dari %ld sampel.\n",
+           window_count, sample_count);
 }
 
 /* ============================================================================
- * MAIN
+ * Main
  * ============================================================================ */
 
 int main(void)
 {
-    mpu6050_config_t cfg;
-    int pass_count = 0;
-    int fail_count = 0;
+    printf("==============================================\n");
+    printf("  Activity Classifier — Hardware Test\n");
+    printf("  Platform: PULPissimo + MPU-6050\n");
+    printf("==============================================\n\n");
 
-    printf("========================================\n");
-    printf(" Activity Classifier — Hardware Test\n");
-    printf(" MPU-6050 on ICDeC PULPissimo FPGA\n");
-    printf(" Window size: %d sampel\n", CLF_WINDOW_SIZE);
-    printf("========================================\n\n");
-
-    /* ---- Test 1 & 2: Sensor Init ---- */
-    if (test_sensor_init(&cfg) == 0) {
-        printf("  PASS: Sensor init\n\n");
-        pass_count++;
-    } else {
-        printf("  FAIL: Sensor init — berhenti\n");
-        fail_count++;
-        goto done;
+    if (init_sensor() != 0) {
+        printf("Test dibatalkan: inisialisasi sensor gagal.\n");
+        return 1;
     }
 
-    /* ---- Test 3: Adapter Sanity ---- */
-    if (test_adapter_sanity() == 0) {
-        printf("  PASS: Adapter sanity\n\n");
-        pass_count++;
-    } else {
-        printf("  FAIL: Adapter sanity\n\n");
-        fail_count++;
-    }
+    run_single_window_test();
+    run_continuous_test();
 
-    /* ---- Test 4: Single Window Classification ---- */
-    if (test_single_window() == 0) {
-        printf("  PASS: Single window classification\n\n");
-        pass_count++;
-    } else {
-        printf("  FAIL: Single window classification\n\n");
-        fail_count++;
-    }
+    printf("\n==============================================\n");
+    printf("  Test hardware selesai.\n");
+    printf("==============================================\n");
 
-    /* ---- Results ---- */
-    printf("========================================\n");
-    printf(" RESULTS: %d PASSED, %d FAILED\n", pass_count, fail_count);
-    printf("========================================\n");
-
-    /* ---- Continuous Classification (hanya jika semua test pass) ---- */
-    if (fail_count == 0) {
-        test_continuous_classification();
-    }
-
-done:
-    mpu6050_deinit();
-
-    printf("\n========================================\n");
-    printf(" TEST SELESAI\n");
-    printf("========================================\n");
-
-    return (fail_count == 0) ? 0 : -1;
+    return 0;
 }
 
-/* PULPissimo runtime membutuhkan stub ini */
-void pe_start(void)
-{
-}
+void pe_start(void) {}

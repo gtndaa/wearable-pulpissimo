@@ -38,9 +38,18 @@
 /* ---- Level 2: Postur — Sit vs Stand (tilt ratio) ---- */
 
 /** Tilt = (sum_az × 1024) / (|sum_ax|+|sum_ay|+|sum_az|+N).
- *  ~1024 = vertikal (berdiri), ~0 = horizontal (duduk).
+ *  ~1024 = vertikal (berdiri), medium = condong (duduk),
+ *  ~0 (atau negatif) = horizontal (tiduran/rebahan).
  *  Tergantung pemasangan sensor. */
 #define CLF_TILT_STAND_THRESHOLD    700
+
+/* ---- Level 2: Postur — Lie/Rebahan (tilt ratio, badan horizontal) ---- */
+
+/** Jika |tilt_ratio| < ambang ini, sumbu Z sensor hampir tegak lurus
+ *  terhadap gravitasi → badan horizontal (tiduran/rebahan), bukan duduk.
+ *  Gunakan abs() karena orientasi rebahan bisa membuat tilt sedikit
+ *  positif maupun negatif tergantung sisi tubuh yang menghadap ke bawah. */
+#define CLF_TILT_LIE_THRESHOLD      250
 
 /* ---- Level 2: Still check (gyro mean_abs) ---- */
 
