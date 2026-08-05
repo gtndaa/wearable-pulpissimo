@@ -1,22 +1,4 @@
-/*
- * Copyright (C) 2026 ICDeC
- *
- * Activity Classifier — Implementation
- *
- * Hierarchical decision tree + majority vote temporal smoothing.
- * Sensor-agnostic: hanya bergantung pada imu_types.h.
- * Integer-only arithmetic, tanpa float/double.
- *
- * Lihat README.md untuk penjelasan lengkap decision tree,
- * feature extraction, overflow analysis, dan data lapangan.
- *
- * Referensi:
- *   - Karantonis et al. (2006) — decision tree, trik Karantonis
- *   - Bourke et al. (2007) — SVM fall detection
- */
-
 #include "classifier.h"
-#include "classifier_config.h"
 
 /* ---- Sliding Window Buffer ---- */
 
@@ -43,27 +25,37 @@ static inline int32_t abs32(int32_t x)
 }
 
 /* ============================================================================
- * Feature Extraction — Accelerometer
+ * Feature Extraction: Accelerometer
  *
- * SMA:      Σ(|ax|+|ay|+|az|). Tidak dibagi N (trik Karantonis).
- * SVM peak: max(ax²+ay²+az²). Tanpa sqrt. uint32_t.
+ * SMA:      Σ(|ax-mean_ax|+|ay-mean_ay|+|az-mean_az|). Deviasi dari rata-rata
+ *           window sendiri (bukan dari nol). Rata-rata window mewakili komponen
+ *           gravitasi (DC) untuk orientasi apapun saat itu sehingga menguranginya
+ *           menyisakan hanya komponen gerak (AC).
+ * SVM peak: max(ax²+ay²+az²). Tanpa sqrt. uint32_t. Dihitung dari nilai RAW
+ *           (bukan deviasi) karena untuk deteksi jatuh dibutuhkan
+ *           magnitude absolut benturan, bukan deviasinya.
  * Tilt:     (sum_az × 1024) / (|sum_ax|+|sum_ay|+|sum_az|+N). ×1024 fixed-pt.
  * ============================================================================ */
 
 void extract_features_accel(const imu_sample_t *buf, int n,
                             accel_features_t *feat)
 {
-    int32_t sum_sma = 0;
-    uint32_t max_svm = 0;
     int32_t sum_ax = 0, sum_ay = 0, sum_az = 0;
+    uint32_t max_svm = 0;
+    int32_t sum_dev = 0;
     int i;
 
+    /* Pass 1: hitung rata-rata window (≈ komponen gravitasi/DC untuk
+     * orientasi window ini) dan svm_max (dari nilai raw, lihat komentar
+     * di atas). */
     for (i = 0; i < n; i++) {
         int16_t ax = buf[i].ax;
         int16_t ay = buf[i].ay;
         int16_t az = buf[i].az;
 
-        sum_sma += (int32_t)abs16(ax) + (int32_t)abs16(ay) + (int32_t)abs16(az);
+        sum_ax += (int32_t)ax;
+        sum_ay += (int32_t)ay;
+        sum_az += (int32_t)az;
 
         uint32_t svm = (uint32_t)((int32_t)ax * ax)
                      + (uint32_t)((int32_t)ay * ay)
@@ -71,22 +63,34 @@ void extract_features_accel(const imu_sample_t *buf, int n,
         if (svm > max_svm) {
             max_svm = svm;
         }
-
-        sum_ax += (int32_t)ax;
-        sum_ay += (int32_t)ay;
-        sum_az += (int32_t)az;
     }
 
-    feat->sma = sum_sma;
+    int32_t mean_ax = sum_ax / n;
+    int32_t mean_ay = sum_ay / n;
+    int32_t mean_az = sum_az / n;
+
+    /* Pass 2: deviasi tiap sampel dari rata-rata window (komponen AC / gerak
+     * murni, gravitasi sudah tersubtraksi apapun orientasinya). */
+    for (i = 0; i < n; i++) {
+        int32_t dx = (int32_t)buf[i].ax - mean_ax;
+        int32_t dy = (int32_t)buf[i].ay - mean_ay;
+        int32_t dz = (int32_t)buf[i].az - mean_az;
+
+        sum_dev += abs32(dx) + abs32(dy) + abs32(dz);
+    }
+
+    feat->sma = sum_dev;
     feat->svm_max = max_svm;
 
-    /* Tilt: faktor N tereduksi di pembilang/penyebut, +N di penyebut. */
+    /* Tilt: faktor N tereduksi di pembilang/penyebut, +N di penyebut.
+     * Tetap pakai sum_ax/sum_ay/sum_az (bukan deviasi) karena tilt
+     * butuh tahu arah gravitasi rata-rata window ini. */
     int32_t denom = abs32(sum_ax) + abs32(sum_ay) + abs32(sum_az) + (int32_t)n;
     feat->tilt_ratio = (sum_az * 1024) / denom;
 }
 
 /* ============================================================================
- * Feature Extraction — Gyroscope
+ * Feature Extraction: Gyroscope
  *
  * Energy:   Σ((gx>>4)²+(gy>>4)²+(gz>>4)²). Shift 4 mencegah overflow.
  * ZCR:      Perubahan tanda gx (XOR bit tanda).
@@ -131,31 +135,36 @@ void extract_features_gyro(const imu_sample_t *buf, int n,
 /* ============================================================================
  * Hierarchical Decision Tree
  *
- * L1: SMA → rest/active
- * L2: mean_abs → still | tilt → sit/stand/lie
+ * Tidak ada kelas still, setiap window SELALU diberi label postur
+ * (SIT/STAND/LIE) via tilt ratio kecuali polanya cocok dengan FALL atau
+ * WALK. Ini berlaku baik untuk window REST (L1) maupun window ACTIVE yang
+ * ternyata bukan fall/walk (mis. transisi reorientasi cepat yang sempat
+ * mendorong SMA di atas ambang).
+ *
+ * L1: SMA (deviation-based) → rest/active
+ * L2: tilt → sit/stand/lie (dipakai sbg hasil REST *dan* sbg fallback)
  * L3: SVM + energy → fall
- * L4: ZCR + energy → walk/run
+ * L4: ZCR + energy → walk (RUN ditiadakan, lihat catatan di classifier.h)
  * ============================================================================ */
+
+static activity_t posture_from_tilt(const accel_features_t *af)
+{
+    if (af->tilt_ratio > CLF_TILT_STAND_THRESHOLD) {
+        return ACTIVITY_STAND;
+    } else if (abs32(af->tilt_ratio) < CLF_TILT_LIE_THRESHOLD) {
+        /* Sumbu Z ~tegak lurus gravitasi → badan horizontal */
+        return ACTIVITY_LIE;
+    } else {
+        return ACTIVITY_SIT;
+    }
+}
 
 static activity_t decide(const accel_features_t *af, const gyro_features_t *gf)
 {
     /* L1: Rest vs Active */
     if (af->sma < CLF_SMA_REST_THRESHOLD) {
-
-        /* L2: Still check */
-        if (gf->mean_abs < CLF_GYRO_MEAN_ABS_STILL_THRESHOLD) {
-            return ACTIVITY_STILL;
-        }
-
-        /* L2: Postur — Stand vs Sit vs Lie (tilt ratio) */
-        if (af->tilt_ratio > CLF_TILT_STAND_THRESHOLD) {
-            return ACTIVITY_STAND;
-        } else if (abs32(af->tilt_ratio) < CLF_TILT_LIE_THRESHOLD) {
-            /* Sumbu Z ~tegak lurus gravitasi → badan horizontal */
-            return ACTIVITY_LIE;
-        } else {
-            return ACTIVITY_SIT;
-        }
+        /* L2: Postur: Stand vs Sit vs Lie (tilt ratio) */
+        return posture_from_tilt(af);
     }
 
     /* L3: Fall (dual-condition: SVM + gyro) */
@@ -164,18 +173,16 @@ static activity_t decide(const accel_features_t *af, const gyro_features_t *gf)
         return ACTIVITY_FALL;
     }
 
-    /* L4: Walk vs Run (ZCR + energy) */
+    /* L4: Walk (ZCR + energy). */
     if (gf->zcr >= CLF_GYRO_ZCR_WALK_MIN &&
         gf->energy >= CLF_GYRO_ENERGY_WALK_THRESHOLD) {
-
-        if (gf->energy >= CLF_GYRO_ENERGY_RUN_THRESHOLD) {
-            return ACTIVITY_RUN;
-        }
         return ACTIVITY_WALK;
     }
 
-    /* Fallback: aktif tapi bukan pola walk/run/fall */
-    return ACTIVITY_STILL;
+    /* Fallback: SMA sempat di atas ambang tapi bukan pola fall/walk
+     * (mis. lonjakan sesaat saat reorientasi) → tetap laporkan postur
+     * dari tilt. */
+    return posture_from_tilt(af);
 }
 
 /* ============================================================================
@@ -223,7 +230,7 @@ activity_t classifier_classify(void)
     window_idx = 0;
     window_full = 0;
 
-    /* FALL bypass — langsung output, reset riwayat (safety-critical) */
+    /* FALL bypass, langsung output, reset riwayat (safety-critical) */
     if (raw_result == ACTIVITY_FALL) {
         vote_idx = 0;
         vote_count = 0;
